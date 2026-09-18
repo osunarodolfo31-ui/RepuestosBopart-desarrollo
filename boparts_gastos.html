@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<!--
+  Repuesto BoParts — boparts_gastos.html
+  VERSION: v1.5 (2026-09-17) — nav con Gerencia | requiere Apps Script v11.2
+  v1.2: 'CUENTA BOPART'; los gastos pagados por un socio generan prestamo de socio (script v11.2); logo sin fondo
+  Registro de gastos operativos (no inventario: eso entra por Compras). Monto en USD o Bs, metodo, quien pago, comprobante.
+-->
+<html lang="es">
+<head>
+<link rel="stylesheet" href="dev.css">
+<script src="dev-config.js"></script>
+<script src="dev-runtime.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>BoParts · Gastos</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --brand:#F5A800;--brand-soft:rgba(245,168,0,.15);
+  --bg:#111;--bg2:#1A1A1A;--card:#1E1E1E;--card2:#252525;--border:#2E2E2E;
+  --ink:#F0F0F0;--ink-soft:#AAA;--ink-muted:#666;
+  --green:#22C55E;--red:#EF4444;
+  --radius:14px;--radius-sm:8px;
+}
+html,body{min-height:100%;background:var(--bg);font-family:'Inter',sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+header{background:var(--bg2);border-bottom:2px solid var(--brand);padding:12px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:50}
+.logo{height:34px;width:auto}
+.hdr h1{font-size:15px;font-weight:700}
+.hdr p{font-size:11px;color:var(--ink-muted)}
+.container{padding:16px;max-width:520px;margin:0 auto;padding-bottom:100px}
+.section{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.stitle{font-size:12px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
+label{font-size:12px;color:var(--ink-soft);font-weight:600;display:block;margin-bottom:4px}
+input,select,textarea{width:100%;background:var(--card2);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;font-family:inherit;color:var(--ink);outline:none;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--brand)}
+input::placeholder,textarea::placeholder{color:var(--ink-muted)}
+select option{background:#1E1E1E;color:var(--ink)}
+.field{margin-bottom:12px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* DROPDOWN */
+.wrap{position:relative}
+.drop{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;position:absolute;width:100%;z-index:80;display:none;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.drop.open{display:block}
+.ditem{padding:10px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--border);color:var(--ink)}
+.ditem:last-child{border-bottom:none}
+.ditem:active,.ditem:hover{background:var(--brand-soft)}
+.ditem-meta{font-size:10px;color:var(--ink-muted);margin-top:2px}
+.ditem-price{font-size:11px;color:var(--brand);font-weight:600;float:right}
+
+/* CART */
+.cart-empty{text-align:center;padding:20px;color:var(--ink-muted);font-size:13px}
+.citem{background:var(--card2);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;border:1px solid var(--border)}
+.ctop{display:flex;align-items:flex-start;gap:8px}
+.cname{font-size:13px;font-weight:600;flex:1;line-height:1.3}
+.cdel{background:none;border:none;color:var(--red);cursor:pointer;font-size:20px;line-height:1;padding:0;flex-shrink:0}
+.cbot{display:grid;grid-template-columns:90px 1fr 1fr;gap:8px;margin-top:8px;align-items:center}
+.qwrap{display:flex;align-items:center;gap:6px}
+.qbtn{background:var(--card);border:1px solid var(--border);border-radius:6px;width:28px;height:28px;color:var(--ink);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.qin{width:36px;text-align:center;padding:4px;font-size:14px;font-weight:700;background:var(--card);border:1px solid var(--border);border-radius:6px}
+.csub{text-align:right;font-size:14px;font-weight:700;color:var(--brand)}
+
+/* TOTALS */
+.tbar{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;display:none}
+.trow{display:flex;justify-content:space-between;margin-bottom:4px}
+.trow:last-child{margin-bottom:0}
+.tlbl{font-size:12px;color:var(--ink-soft)}
+.tval{font-size:14px;font-weight:700}
+.tval.big{font-size:18px;color:var(--brand)}
+.tval.red{color:var(--red)}
+
+/* PAYMENT */
+.pblock{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;position:relative}
+.pdel{position:absolute;top:10px;right:10px;background:none;border:none;color:var(--red);cursor:pointer;font-size:16px}
+.addpbtn{width:100%;padding:10px;background:none;border:1.5px dashed var(--border);border-radius:var(--radius-sm);color:var(--ink-muted);font-size:13px;cursor:pointer;font-family:inherit;transition:border-color .15s}
+.addpbtn:hover{border-color:var(--brand);color:var(--brand)}
+.cominfo{font-size:11px;color:var(--ink-muted);margin-top:6px;padding:6px 8px;background:rgba(245,168,0,.08);border-radius:6px;border-left:2px solid var(--brand)}
+
+/* ALIADO */
+.togwrap{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:10px}
+.toglbl{font-size:13px;font-weight:600}
+.togsub{font-size:11px;color:var(--ink-muted);margin-top:2px}
+.tog{width:44px;height:24px;background:var(--border);border-radius:12px;cursor:pointer;position:relative;transition:background .2s;border:none;flex-shrink:0}
+.tog.on{background:var(--brand)}
+.tog::after{content:'';position:absolute;width:18px;height:18px;background:#fff;border-radius:50%;top:3px;left:3px;transition:left .2s}
+.tog.on::after{left:23px}
+.asel{display:none;margin-top:10px}
+.asel.open{display:block}
+.acard{background:var(--card2);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:12px;cursor:pointer;margin-bottom:8px;transition:border-color .15s}
+.acard.sel{border-color:var(--brand);background:var(--brand-soft)}
+.aname{font-size:13px;font-weight:700}
+.aneg{font-size:11px;color:var(--ink-muted)}
+.acom{font-size:11px;color:var(--brand);font-weight:600;float:right}
+.cprev{background:rgba(245,168,0,.1);border:1px solid rgba(245,168,0,.3);border-radius:var(--radius-sm);padding:10px 12px;margin-top:10px;font-size:12px;color:var(--ink-soft);display:none}
+.cprev.open{display:block}
+
+/* SUBMIT */
+.subbtn{width:100%;padding:16px;background:var(--brand);color:#111;border:none;border-radius:var(--radius);font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;position:fixed;bottom:0;left:0;right:0;max-width:520px;margin:0 auto}
+.subbtn:disabled{opacity:.5}
+.botbar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:8px;padding:10px 12px;background:var(--bg);border-top:1px solid var(--border);z-index:100;max-width:520px;margin:0 auto}
+.botbar .subbtn{position:static;flex:1;padding:14px}
+.botbar .cotbtn{flex:0 0 36%;background:var(--card2);color:var(--brand);border:1.5px solid var(--brand)}
+.nbtn-p:disabled{opacity:.5}
+
+/* MODALS */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:none;align-items:flex-end}
+.overlay.open{display:flex}
+.sheet{background:var(--bg2);border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:20px 16px 40px;width:100%;max-height:90vh;overflow-y:auto}
+.sheet-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.sheet-sub{font-size:12px;color:var(--ink-muted);margin-bottom:16px}
+
+/* SUCCESS */
+.success{display:none;position:fixed;inset:0;background:var(--bg);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
+.success.open{display:flex}
+.sicon{font-size:64px;margin-bottom:16px}
+.success h2{font-size:22px;font-weight:700;margin-bottom:8px}
+.success p{font-size:14px;color:var(--ink-muted);margin-bottom:24px;line-height:1.6;white-space:pre-line}
+.sbtn{width:100%;padding:14px;border:none;border-radius:var(--radius);font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:10px}
+.sbtn-y{background:var(--brand);color:#111}
+.sbtn-n{background:var(--card2);color:var(--ink-soft);border:1px solid var(--border)}
+
+/* NOTA BUTTONS */
+.nbtn{width:100%;padding:13px;border-radius:var(--radius);font-size:14px;font-weight:700;border:none;cursor:pointer;font-family:inherit;margin-bottom:8px}
+.nbtn-p{background:var(--brand);color:#111}
+.nbtn-w{background:#25D366;color:#fff;display:none}
+.nbtn-s{background:var(--card2);color:var(--ink-soft);border:1px solid var(--border)}
+
+/* CLIENTE CARD */
+.cli-result{background:var(--brand-soft);border:1.5px solid var(--brand);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.cli-info{font-size:13px;font-weight:600}
+.cli-sub{font-size:11px;color:var(--ink-muted)}
+.cli-clear{background:none;border:none;color:var(--ink-muted);cursor:pointer;font-size:18px}
+.cli-new-btn{width:100%;padding:10px;background:none;border:1.5px dashed var(--brand);border-radius:var(--radius-sm);color:var(--brand);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;margin-top:8px}
+
+/* TOAST */
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(40px);opacity:0;visibility:hidden;background:#222;color:#fff;padding:12px 20px;border-radius:18px;font-size:13px;font-weight:600;transition:transform .3s,opacity .3s,visibility .3s;z-index:999;max-width:92vw;text-align:center;line-height:1.4;cursor:pointer;border:1px solid var(--border);pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1;visibility:visible}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red);white-space:pre-line}
+
+/* NAV */
+.fab{position:fixed;bottom:70px;right:16px;z-index:90;width:48px;height:48px;background:var(--brand);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(245,168,0,.4)}
+.nav-ov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:91;opacity:0;pointer-events:none;transition:opacity .2s}
+.nav-ov.open{opacity:1;pointer-events:auto}
+.nav-pan{position:fixed;bottom:0;left:0;right:0;z-index:92;background:var(--bg2);border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:20px 16px 40px;transform:translateY(100%);transition:transform .3s}
+.nav-pan.open{transform:translateY(0)}
+.nav-t{font-size:12px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px;text-align:center}
+.nav-g{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ncard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;text-decoration:none;-webkit-tap-highlight-color:transparent}
+.ncard.cur{border-color:var(--brand);background:var(--brand-soft)}
+.nicon{font-size:28px}
+.nlbl{font-size:12px;font-weight:700;color:var(--ink);text-align:center}
+.ndesc{font-size:10px;color:var(--ink-muted);text-align:center}
+
+/* COMPRAS */
+.linea{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px}
+.linea .ltop{display:flex;gap:8px;align-items:flex-start}
+.linea .lname{flex:1;font-size:13px;font-weight:600;line-height:1.3}
+.linea .lmeta{font-size:11px;color:var(--ink-muted);margin-top:2px}
+.linea .lbot{display:flex;align-items:center;gap:10px;margin-top:8px}
+.tagnuevo{font-size:10px;font-weight:700;background:var(--brand-soft);color:var(--brand);padding:2px 8px;border-radius:10px}
+.fotobox{border:1.5px dashed var(--border);border-radius:var(--radius-sm);padding:14px;text-align:center;color:var(--ink-muted);font-size:13px;cursor:pointer;position:relative}
+.fotobox input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.fotobox.ok{border-color:var(--green);color:var(--green)}
+.resumen{display:flex;justify-content:space-between;font-size:13px;color:var(--ink-soft);padding:8px 0}
+</style>
+</head>
+<body>
+
+<header>
+  <img src="logo-header.png" alt="BoParts" class="logo">
+  <div class="hdr">
+    <h1>Registrar Gasto</h1>
+    <p id="fechaHdr"></p>
+  </div>
+</header>
+
+<div class="container">
+  <div class="section">
+    <div class="stitle">Gasto</div>
+    <div class="row2">
+      <div class="field"><label>Fecha</label><input type="date" id="inFecha"></div>
+      <div class="field"><label>Categoria *</label>
+        <select id="selCat">
+          <option value="">Seleccionar...</option>
+          <option>ALQUILER</option>
+          <option>SUELDOS Y COMISIONES</option>
+          <option>SERVICIOS (luz, agua, internet, telefono)</option>
+          <option>LOGISTICA (fletes, envios, transporte)</option>
+          <option>IMPUESTOS Y BANCARIOS</option>
+          <option>MANTENIMIENTO Y EQUIPOS</option>
+          <option>PAPELERIA Y LIMPIEZA</option>
+          <option>PUBLICIDAD</option>
+          <option>OTROS</option>
+        </select>
+      </div>
+    </div>
+    <div class="cominfo" style="margin-bottom:10px">Compra de mercancia para vender NO se registra aqui: va por <b>Compras</b>.</div>
+    <div class="field"><label>Descripcion *</label><input type="text" id="inDesc" placeholder="Ej: Internet septiembre, flete Caracas, bolsas..."></div>
+    <div class="row2">
+      <div class="field"><label>Monto *</label><input type="number" id="inMonto" placeholder="0.00" step="0.01" oninput="preview()"></div>
+      <div class="field"><label>Moneda</label><select id="selMon" onchange="preview()"><option value="BS">Bs</option><option value="USD">USD</option></select></div>
+    </div>
+    <div id="prev" class="cominfo" style="display:none"></div>
+  </div>
+
+  <div class="section">
+    <div class="stitle">Pago</div>
+    <div class="field"><label>Metodo</label><select id="selMet"></select></div>
+    <div class="row2">
+      <div class="field"><label>Pagado por *</label>
+        <select id="selPago"><option value="">Seleccionar...</option><option>CAJA TIENDA</option><option>RODOLFO</option><option>JAVIER</option><option>CUENTA BOPART</option></select>
+      </div>
+      <div class="field"><label>Registrado por *</label>
+        <select id="selV"><option value="">Seleccionar...</option><option>Rodolfo Osuna</option><option>Javier Boves</option><option>Reinaldo Cuicas</option></select>
+      </div>
+    </div>
+    <label>Comprobante (factura, capture del pago)</label>
+    <div class="fotobox" id="fotoBox">Tocar para fotografiar o elegir de galeria<input type="file" accept="image/*" onchange="subirFoto(this)"></div>
+    <div class="field" style="margin-top:10px"><label>Notas</label><input type="text" id="inNotas" placeholder="Opcional"></div>
+  </div>
+</div>
+
+<button class="subbtn" id="btnGuardar" onclick="guardar()">Registrar Gasto</button>
+
+<div class="success" id="success">
+  <div class="sicon">💸</div>
+  <h2>Gasto Registrado</h2>
+  <p id="successMsg"></p>
+  <button class="sbtn sbtn-y" onclick="nuevo()">Registrar otro</button>
+</div>
+
+<div class="toast" id="toast" onclick="this.className='toast'"></div>
+
+<!-- FAB NAV -->
+<button class="fab" onclick="toggleNav()">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.5" stroke-linecap="round">
+    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+  </svg>
+</button>
+<div class="nav-ov" id="navOv" onclick="closeNav()"></div>
+<div class="nav-pan" id="navPan">
+  <div class="nav-t">Repuesto BoParts</div>
+  <div class="nav-g">
+    <a class="ncard" href="index.html">
+      <span class="nicon">📋</span>
+      <span class="nlbl">Lista de Precios</span>
+      <span class="ndesc">Consulta y busqueda</span>
+    </a>
+    <a class="ncard" href="boparts_ventas.html">
+      <span class="nicon">💰</span>
+      <span class="nlbl">Registrar Venta</span>
+      <span class="ndesc">Nueva venta</span>
+    </a>
+    <a class="ncard" href="boparts_fotos.html">
+      <span class="nicon">📷</span>
+      <span class="nlbl">Cargar Fotos</span>
+      <span class="ndesc">Catalogo imagenes</span>
+    </a>
+    <a class="ncard" href="boparts_demanda.html">
+      <span class="nicon">📝</span>
+      <span class="nlbl">Demanda</span>
+      <span class="ndesc">No atendida</span>
+    </a>
+    <a class="ncard" href="boparts_compras.html">
+      <span class="nicon">📦</span>
+      <span class="nlbl">Compras</span>
+      <span class="ndesc">Recibir mercancia</span>
+    </a>
+    <a class="ncard cur" href="boparts_gastos.html">
+      <span class="nicon">💸</span>
+      <span class="nlbl">Gastos</span>
+      <span class="ndesc">Registrar gasto</span>
+    </a>
+    <a class="ncard" href="boparts_cobros.html">
+      <span class="nicon">🧾</span>
+      <span class="nlbl">Cobros</span>
+      <span class="ndesc">Cuentas por cobrar</span>
+    </a>
+    <a class="ncard" href="boparts_gerencia.html">
+      <span class="nicon">📊</span>
+      <span class="nlbl">Gerencia</span>
+      <span class="ndesc">Solo socios</span>
+    </a>
+    <a class="ncard" href="boparts_apartados.html">
+      <span class="nicon">🔖</span>
+      <span class="nlbl">Apartados</span>
+      <span class="ndesc">Y contra pedido</span>
+    </a>
+    <a class="ncard" href="boparts_devoluciones.html">
+      <span class="nicon">↩️</span>
+      <span class="nlbl">Devoluciones</span>
+      <span class="ndesc">Y cambios</span>
+    </a>
+    <a class="ncard" href="boparts_inventario.html">
+      <span class="nicon">🧮</span>
+      <span class="nlbl">Inventario</span>
+      <span class="ndesc">Conteo de stock</span>
+    </a>
+  </div>
+</div>
+
+<script>
+var SCRIPT_URL = BoPartsDev.apiUrl;
+var CLOUD = 'DEV_UPLOADS_DISABLED', PRESET = 'DEV_UPLOADS_DISABLED';
+var APP_VERSION = 'v1.5';
+var TASA = parseFloat(BoPartsDev.localStorage.getItem('motoauto_tasa') || '0');
+var comprobante = '';
+var METODOS = [
+  {label:'Efectivo USD',        metodo:'Efectivo',        banco:'',                     moneda:'USD', fijo:0,    pct:0  },
+  {label:'Efectivo Bs',         metodo:'Efectivo',        banco:'',                     moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Pago Movil Banesco',  metodo:'Pago Movil',      banco:'Banesco',               moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Pago Movil Bancrecer',metodo:'Pago Movil',      banco:'Bancrecer',             moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Punto Bancamiga',     metodo:'Punto de Venta',  banco:'Bancamiga',             moneda:'BS',  fijo:1000, pct:1.5},
+  {label:'Punto Bancrecer Emp.',metodo:'Punto de Venta',  banco:'Bancrecer Empresarial', moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Cashea Bancrecer',    metodo:'Cashea',          banco:'Bancrecer Empresarial', moneda:'BS',  fijo:0,    pct:0  },
+  {label:'CREDITO (cuenta por cobrar)', metodo:'Credito', banco:'',                     moneda:'USD', fijo:0,    pct:0, credito:true }
+];
+
+document.getElementById('fechaHdr').textContent = APP_VERSION + ' · ' + new Date().toLocaleDateString('es-VE', {weekday:'long', day:'numeric', month:'long'});
+(function() {
+  var d = new Date(); document.getElementById('inFecha').value = d.getFullYear() + '-' + pad2(d.getMonth()+1) + '-' + pad2(d.getDate());
+  var h = '<option value="">Seleccionar...</option>';
+  for (var i = 0; i < METODOS.length; i++) if (!METODOS[i].credito) h += '<option value="' + i + '">' + escHtml(METODOS[i].label) + '</option>';
+  document.getElementById('selMet').innerHTML = h;
+  ['selCat','selPago','selV','selMet','selMon'].forEach(function(id) { var s = BoPartsDev.localStorage.getItem('boparts_gasto_' + id); if (s) document.getElementById(id).value = s; });
+})();
+function preview() {
+  var m = parseFloat(document.getElementById('inMonto').value) || 0, mon = document.getElementById('selMon').value, el = document.getElementById('prev');
+  if (!m) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = TASA ? (mon === 'BS' ? 'Equivale a <b>' + fmtUSD(m / TASA) + '</b> a tasa ' + TASA : 'Equivale a <b>' + fmtBS(m * TASA) + '</b> a tasa ' + TASA) : 'Sin tasa guardada en este telefono: se registra sin equivalencia.';
+}
+function subirFoto(input) {
+  var file = input.files[0]; if (!file) return;
+  var box = document.getElementById('fotoBox'); box.textContent = 'Subiendo...';
+  comprimir(file, 1600, 0.8).then(function(blob) {
+    var fd = new FormData(); fd.append('file', blob, 'gasto.jpg'); fd.append('upload_preset', PRESET); fd.append('folder', 'boparts/gastos');
+    return BoPartsDev.fetch('https://api.cloudinary.com/v1_1/' + CLOUD + '/image/upload', {method:'POST', body:fd}).then(leerJSON);
+  }).then(function(d) {
+    if (!d.secure_url) throw new Error('sin url');
+    comprobante = d.secure_url; box.className = 'fotobox ok'; box.innerHTML = 'Comprobante subido ✓<input type="file" accept="image/*" onchange="subirFoto(this)">';
+  }).catch(function() { box.className = 'fotobox'; box.innerHTML = 'Error al subir. Tocar para reintentar<input type="file" accept="image/*" onchange="subirFoto(this)">'; });
+}
+function comprimir(file, maxPx, calidad) {
+  return new Promise(function(res) {
+    var img = new Image(), url = URL.createObjectURL(file);
+    img.onload = function() {
+      var sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+      var cv = document.createElement('canvas'); cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob(function(b) { res(b || file); }, 'image/jpeg', calidad);
+    };
+    img.onerror = function() { res(file); };
+    img.src = url;
+  });
+}
+
+function guardar() {
+  var cat = document.getElementById('selCat').value, desc = document.getElementById('inDesc').value.trim();
+  var monto = parseFloat(document.getElementById('inMonto').value) || 0, mon = document.getElementById('selMon').value;
+  var mi = parseInt(document.getElementById('selMet').value), m = isNaN(mi) ? null : METODOS[mi];
+  var pagadoPor = document.getElementById('selPago').value, quien = document.getElementById('selV').value, f = document.getElementById('inFecha').value;
+  if (!cat) { toast('Elige la categoria', 'err'); return; }
+  if (!desc) { toast('Escribe la descripcion', 'err'); return; }
+  if (!(monto > 0)) { toast('Indica el monto', 'err'); return; }
+  if (!pagadoPor || !quien) { toast('Indica quien pago y quien registra', 'err'); return; }
+  if (!f) { toast('Indica la fecha', 'err'); return; }
+  ['selCat','selPago','selV','selMet','selMon'].forEach(function(id) { BoPartsDev.localStorage.setItem('boparts_gasto_' + id, document.getElementById(id).value); });
+  var fp = f.split('-'), now = new Date();
+  var payload = {
+    tipo:'gasto', idGasto:'G' + now.getFullYear() + pad2(now.getMonth()+1) + pad2(now.getDate()) + '-' + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds()),
+    fecha:parseInt(fp[2]) + '/' + parseInt(fp[1]) + '/' + fp[0], hora:now.toLocaleTimeString('es-VE', {hour:'2-digit', minute:'2-digit'}),
+    categoria:cat.split(' (')[0], descripcion:desc, monto:monto, moneda:mon, tasa:TASA,
+    metodo:m ? m.metodo : '', banco:m ? m.banco : '', pagadoPor:pagadoPor, registradoPor:quien, comprobante:comprobante, notas:document.getElementById('inNotas').value.trim()
+  };
+  var btn = document.getElementById('btnGuardar'); btn.disabled = true; btn.textContent = 'Guardando...';
+  BoPartsDev.fetch(SCRIPT_URL, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(payload)})
+    .then(function(r) { return r.text(); }).then(function(t) { try { return JSON.parse(t); } catch (e) { throw new Error('El script respondio: ' + t.replace(/<[^>]+>/g, ' ').slice(0, 100)); } })
+    .then(function(d) {
+      btn.disabled = false; btn.textContent = 'Registrar Gasto';
+      if (!d || d.ok !== true) throw new Error(d && d.error ? d.error : 'Respuesta inesperada');
+      document.getElementById('successMsg').textContent = payload.categoria + ' - ' + desc + '\n' + (mon === 'BS' ? fmtBS(monto) : fmtUSD(monto)) + ' · ' + pagadoPor;
+      document.getElementById('success').classList.add('open');
+    })
+    .catch(function(e) { btn.disabled = false; btn.textContent = 'Registrar Gasto'; toast('No se guardo el gasto (' + (e && e.message ? e.message : 'sin conexion') + '). Reintenta.', 'err'); });
+}
+function nuevo() {
+  document.getElementById('success').classList.remove('open');
+  document.getElementById('inDesc').value = ''; document.getElementById('inMonto').value = ''; document.getElementById('inNotas').value = ''; comprobante = ''; preview();
+  var box = document.getElementById('fotoBox'); box.className = 'fotobox'; box.innerHTML = 'Tocar para fotografiar o elegir de galeria<input type="file" accept="image/*" onchange="subirFoto(this)">';
+}
+function fmtUSD(n) { return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+function fmtBS(n) { return 'Bs ' + Math.round(n).toLocaleString('es-VE'); }
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function toast(msg, type) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(el._t);
+  el._t = setTimeout(function() { el.className = 'toast'; }, type === 'err' ? 7000 : 3500);
+}
+
+function toggleNav() {
+  document.getElementById('navPan').classList.toggle('open');
+  document.getElementById('navOv').classList.toggle('open');
+}
+function closeNav() {
+  document.getElementById('navPan').classList.remove('open');
+  document.getElementById('navOv').classList.remove('open');
+}
+
+
+// La tasa la fijan los socios desde Gerencia y vive en CONFIG: aqui solo se lee y se guarda por si no hay senal.
+function sincronizarTasa(despues) {
+  BoPartsDev.fetch(SCRIPT_URL + '?action=config&t=' + Date.now())
+    .then(leerJSON)
+    .then(function(d) {
+      if (!d || !d.ok || !(d.tasa > 0) || d.tasa === TASA) return;
+      TASA = d.tasa;
+      try { BoPartsDev.localStorage.setItem('motoauto_tasa', String(TASA)); } catch (e) {}
+      if (typeof despues === 'function') despues();
+    })
+    .catch(function() {});
+}
+sincronizarTasa(preview);
+
+// Lee la respuesta del script con cuidado: si Apps Script devuelve su pagina de error (HTML),
+// r.json() explota con "Unexpected token '<'". Asi se explica que pasa en vez de mostrar eso.
+function leerJSON(r) {
+  return r.text().then(function(t) {
+    try { return JSON.parse(t); }
+    catch (e) {
+      var limpio = String(t).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      throw new Error('El script no devolvio datos' + (limpio ? ': ' + limpio : '') + '. Revisa que Apps Script este desplegado como Nueva version.');
+    }
+  });
+}
+</script>
+</body>
+</html>

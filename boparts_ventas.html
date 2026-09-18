@@ -1,0 +1,1981 @@
+<!DOCTYPE html>
+<!--
+  Repuesto BoParts — boparts_ventas.html
+  VERSION: v13.2 (2026-09-17) | requiere Apps Script v19
+  v13.1: interruptor "Facturar": encendido agrega el IVA y habilita la factura fiscal; apagado la venta va sin IVA
+         y solo con nota de entrega. Por defecto esta apagado.
+  v13: IVA 16% discriminado, tasa BCV para la factura, metodo Cashea con su desglose (inicial, financiado,
+       comision 4% + 4%, neto) y FACTURA como segundo documento junto a la nota de entrega
+  v12: toda venta pide cliente (busqueda por telefono, cedula o nombre; alta rapida con nombre, cedula y telefono).
+       El credito respeta el limite del cliente: pasarse requiere PIN de socios.
+  v11.1: el canal SOCIO se pone solo con el interruptor (elegirlo a mano no bajaba los precios a costo);
+         el PIN se pide cada vez; con credito, el cliente es el propio socio
+  v11: modo "venta a socio" (precio de costo, canal SOCIO, de contado o a credito) protegido con el PIN de socios;
+       la tasa se sincroniza desde CONFIG, que fijan los socios en Gerencia
+  v10.10: logo sin fondo en el encabezado
+  v10.8: lee precio y tasa con coma o punto decimal
+  v10.7: enlace a Compras en el nav
+  v10.6: al generar la nota se usa el cliente que esta en pantalla aunque la variable interna se haya perdido
+  v10.5: la version se mostraba como 'undefined'; la carga de clientes reporta que fallo y se apoya en Apps Script si el CSV no responde
+  v10.4: agregar forma de pago ya no borra las anteriores; al elegir metodo se sugiere el monto que falta; avisos se cierran solos
+         y al tocarlos; comision oculta al vender (se sigue calculando); clientes guardados en el telefono por si la hoja tarda
+  v10.3: el mensaje de WhatsApp de la nota incluye la forma de pago recibida; la version se muestra en el encabezado de la app
+  v10.2: el numero de nota llega con la respuesta de la venta (no hay espera al generar el PDF); el numero de cotizacion
+         se pide al abrir la pantalla de cotizar; la nota de entrega ya no muestra la tasa BCV
+  v10.1: la cotizacion se emite en Bs o en USD (selector en la pantalla de cotizacion) y no muestra la tasa BCV
+  v10: nota de entrega y cotizacion en PDF generado en el telefono (jsPDF) con boton Compartir (Gmail, WhatsApp, Drive...);
+       boton Cotizar que no registra venta; cotizaciones se guardan en hoja COTIZACIONES con numeracion COT-xxxx
+  v9.1: si el script responde algo inesperado, el aviso muestra que respondio; el toast ya no se corta en pantalla
+  v9: ventas a credito (metodo CREDITO solo para clientes con CREDITO=SI en hoja CLIENTES), cliente y moneda de cada pago van en la venta,
+      validacion de que los pagos cubren el total, corregido bug de seleccion de cliente en la busqueda
+  v8.1: el costo de la hoja llega como texto con formato moneda ('$ 6.04'); ahora se limpia antes de convertir
+  Cambios v8: costo por linea (col H), idVenta, hoja Ventas_Detalle, POST con respuesta, tasa desde hoja si el dispositivo no la tiene
+  Anterior: v7 = commit 4269b17 en GitHub (History > Browse files > descargar)
+-->
+
+<html lang="es">
+<head>
+<link rel="stylesheet" href="dev.css">
+<script src="dev-config.js"></script>
+<script src="dev-runtime.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>BoParts · Ventas</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --brand:#F5A800;--brand-soft:rgba(245,168,0,.15);
+  --bg:#111;--bg2:#1A1A1A;--card:#1E1E1E;--card2:#252525;--border:#2E2E2E;
+  --ink:#F0F0F0;--ink-soft:#AAA;--ink-muted:#666;
+  --green:#22C55E;--red:#EF4444;
+  --radius:14px;--radius-sm:8px;
+}
+html,body{min-height:100%;background:var(--bg);font-family:'Inter',sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+header{background:var(--bg2);border-bottom:2px solid var(--brand);padding:12px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:50}
+.logo{height:34px;width:auto}
+.hdr h1{font-size:15px;font-weight:700}
+.hdr p{font-size:11px;color:var(--ink-muted)}
+.container{padding:16px;max-width:520px;margin:0 auto;padding-bottom:100px}
+.section{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.stitle{font-size:12px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
+label{font-size:12px;color:var(--ink-soft);font-weight:600;display:block;margin-bottom:4px}
+input,select,textarea{width:100%;background:var(--card2);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;font-family:inherit;color:var(--ink);outline:none;transition:border-color .15s}
+input:focus,select:focus,textarea:focus{border-color:var(--brand)}
+input::placeholder,textarea::placeholder{color:var(--ink-muted)}
+select option{background:#1E1E1E;color:var(--ink)}
+.field{margin-bottom:12px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* DROPDOWN */
+.wrap{position:relative}
+.drop{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;position:absolute;width:100%;z-index:80;display:none;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.drop.open{display:block}
+.ditem{padding:10px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--border);color:var(--ink)}
+.ditem:last-child{border-bottom:none}
+.ditem:active,.ditem:hover{background:var(--brand-soft)}
+.ditem-meta{font-size:10px;color:var(--ink-muted);margin-top:2px}
+.ditem-price{font-size:11px;color:var(--brand);font-weight:600;float:right}
+
+/* CART */
+.cart-empty{text-align:center;padding:20px;color:var(--ink-muted);font-size:13px}
+.citem{background:var(--card2);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;border:1px solid var(--border)}
+.ctop{display:flex;align-items:flex-start;gap:8px}
+.cname{font-size:13px;font-weight:600;flex:1;line-height:1.3}
+.cdel{background:none;border:none;color:var(--red);cursor:pointer;font-size:20px;line-height:1;padding:0;flex-shrink:0}
+.cbot{display:grid;grid-template-columns:90px 1fr 1fr;gap:8px;margin-top:8px;align-items:center}
+.qwrap{display:flex;align-items:center;gap:6px}
+.qbtn{background:var(--card);border:1px solid var(--border);border-radius:6px;width:28px;height:28px;color:var(--ink);font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.qin{width:36px;text-align:center;padding:4px;font-size:14px;font-weight:700;background:var(--card);border:1px solid var(--border);border-radius:6px}
+.csub{text-align:right;font-size:14px;font-weight:700;color:var(--brand)}
+
+/* TOTALS */
+.tbar{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;display:none}
+.trow{display:flex;justify-content:space-between;margin-bottom:4px}
+.trow:last-child{margin-bottom:0}
+.tlbl{font-size:12px;color:var(--ink-soft)}
+.tval{font-size:14px;font-weight:700}
+.tval.big{font-size:18px;color:var(--brand)}
+.tval.red{color:var(--red)}
+
+/* PAYMENT */
+.pblock{background:var(--card2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px;position:relative}
+.pdel{position:absolute;top:10px;right:10px;background:none;border:none;color:var(--red);cursor:pointer;font-size:16px}
+.addpbtn{width:100%;padding:10px;background:none;border:1.5px dashed var(--border);border-radius:var(--radius-sm);color:var(--ink-muted);font-size:13px;cursor:pointer;font-family:inherit;transition:border-color .15s}
+.addpbtn:hover{border-color:var(--brand);color:var(--brand)}
+.cominfo{font-size:11px;color:var(--ink-muted);margin-top:6px;padding:6px 8px;background:rgba(245,168,0,.08);border-radius:6px;border-left:2px solid var(--brand)}
+
+/* ALIADO */
+.togwrap{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);margin-bottom:10px}
+.toglbl{font-size:13px;font-weight:600}
+.togsub{font-size:11px;color:var(--ink-muted);margin-top:2px}
+.tog{width:44px;height:24px;background:var(--border);border-radius:12px;cursor:pointer;position:relative;transition:background .2s;border:none;flex-shrink:0}
+.tog.on{background:var(--brand)}
+.tog::after{content:'';position:absolute;width:18px;height:18px;background:#fff;border-radius:50%;top:3px;left:3px;transition:left .2s}
+.tog.on::after{left:23px}
+.asel{display:none;margin-top:10px}
+.asel.open{display:block}
+.acard{background:var(--card2);border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:12px;cursor:pointer;margin-bottom:8px;transition:border-color .15s}
+.acard.sel{border-color:var(--brand);background:var(--brand-soft)}
+.aname{font-size:13px;font-weight:700}
+.aneg{font-size:11px;color:var(--ink-muted)}
+.acom{font-size:11px;color:var(--brand);font-weight:600;float:right}
+.cprev{background:rgba(245,168,0,.1);border:1px solid rgba(245,168,0,.3);border-radius:var(--radius-sm);padding:10px 12px;margin-top:10px;font-size:12px;color:var(--ink-soft);display:none}
+.cprev.open{display:block}
+
+/* SUBMIT */
+.subbtn{width:100%;padding:16px;background:var(--brand);color:#111;border:none;border-radius:var(--radius);font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;position:fixed;bottom:0;left:0;right:0;max-width:520px;margin:0 auto}
+.subbtn:disabled{opacity:.5}
+.botbar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:8px;padding:10px 12px;background:var(--bg);border-top:1px solid var(--border);z-index:100;max-width:520px;margin:0 auto}
+.botbar .subbtn{position:static;flex:1;padding:14px}
+.botbar .cotbtn{flex:0 0 36%;background:var(--card2);color:var(--brand);border:1.5px solid var(--brand)}
+.nbtn-p:disabled{opacity:.5}
+
+/* MODALS */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;display:none;align-items:flex-end}
+.overlay.open{display:flex}
+.sheet{background:var(--bg2);border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:20px 16px 40px;width:100%;max-height:90vh;overflow-y:auto}
+.sheet-title{font-size:16px;font-weight:700;margin-bottom:4px}
+.sheet-sub{font-size:12px;color:var(--ink-muted);margin-bottom:16px}
+
+/* SUCCESS */
+.success{display:none;position:fixed;inset:0;background:var(--bg);z-index:300;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center}
+.success.open{display:flex}
+.sicon{font-size:64px;margin-bottom:16px}
+.success h2{font-size:22px;font-weight:700;margin-bottom:8px}
+.success p{font-size:14px;color:var(--ink-muted);margin-bottom:24px;line-height:1.6;white-space:pre-line}
+.sbtn{width:100%;padding:14px;border:none;border-radius:var(--radius);font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:10px}
+.sbtn-y{background:var(--brand);color:#111}
+.sbtn-n{background:var(--card2);color:var(--ink-soft);border:1px solid var(--border)}
+
+/* NOTA BUTTONS */
+.nbtn{width:100%;padding:13px;border-radius:var(--radius);font-size:14px;font-weight:700;border:none;cursor:pointer;font-family:inherit;margin-bottom:8px}
+.nbtn-p{background:var(--brand);color:#111}
+.nbtn-w{background:#25D366;color:#fff;display:none}
+.nbtn-s{background:var(--card2);color:var(--ink-soft);border:1px solid var(--border)}
+
+/* CLIENTE CARD */
+.cli-result{background:var(--brand-soft);border:1.5px solid var(--brand);border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.cli-info{font-size:13px;font-weight:600}
+.cli-sub{font-size:11px;color:var(--ink-muted)}
+.cli-clear{background:none;border:none;color:var(--ink-muted);cursor:pointer;font-size:18px}
+.cli-new-btn{width:100%;padding:10px;background:none;border:1.5px dashed var(--brand);border-radius:var(--radius-sm);color:var(--brand);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;margin-top:8px}
+
+/* TOAST */
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%) translateY(40px);opacity:0;visibility:hidden;background:#222;color:#fff;padding:12px 20px;border-radius:18px;font-size:13px;font-weight:600;transition:transform .3s,opacity .3s,visibility .3s;z-index:999;max-width:92vw;text-align:center;line-height:1.4;cursor:pointer;border:1px solid var(--border);pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0);opacity:1;visibility:visible}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red);white-space:pre-line}
+
+/* NAV */
+.fab{position:fixed;bottom:70px;right:16px;z-index:90;width:48px;height:48px;background:var(--brand);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(245,168,0,.4)}
+.nav-ov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:91;opacity:0;pointer-events:none;transition:opacity .2s}
+.nav-ov.open{opacity:1;pointer-events:auto}
+.nav-pan{position:fixed;bottom:0;left:0;right:0;z-index:92;background:var(--bg2);border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:20px 16px 40px;transform:translateY(100%);transition:transform .3s}
+.nav-pan.open{transform:translateY(0)}
+.nav-t{font-size:12px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px;text-align:center}
+.nav-g{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.ncard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;text-decoration:none;-webkit-tap-highlight-color:transparent}
+.ncard.cur{border-color:var(--brand);background:var(--brand-soft)}
+.nicon{font-size:28px}
+.nlbl{font-size:12px;font-weight:700;color:var(--ink);text-align:center}
+.ndesc{font-size:10px;color:var(--ink-muted);text-align:center}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+</head>
+<body>
+
+<header>
+  <img src="logo-header.png" alt="BoParts" class="logo">
+  <div class="hdr">
+    <h1>Registrar Venta</h1>
+    <p id="fechaHdr"></p>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- VENDEDOR & CANAL -->
+  <div class="section">
+    <div class="stitle">Vendedor y Canal</div>
+    <div class="row2">
+      <div class="field">
+        <label>Vendedor</label>
+        <select id="selV">
+          <option value="">Seleccionar...</option>
+          <option>Rodolfo Osuna</option>
+          <option>Javier Boves</option>
+          <option>Reinaldo Cuicas</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Canal</label>
+        <select id="selC">
+          <option value="">Seleccionar...</option>
+          <option>Presencial</option>
+          <option>WhatsApp</option>
+          <option>Mercado Libre</option>
+          <option>Marketplace</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLIENTE -->
+  <div class="section" id="secCliente">
+    <div class="stitle">Cliente</div>
+    <div class="field wrap" id="cliVtaWrap">
+      <label>Telefono, cedula o nombre *</label>
+      <input type="search" id="cliVta" placeholder="0414... / V-12345678 / Nombre" autocomplete="off">
+      <div class="drop" id="cliVtaDrop"></div>
+    </div>
+    <div id="cliVtaSel" style="display:none"></div>
+    <div id="cliVtaForm" style="display:none">
+      <div class="field"><label>Nombre y apellido *</label><input type="text" id="nvNombre"></div>
+      <div class="row2">
+        <div class="field"><label>Cedula / RIF *</label><input type="text" id="nvCed" placeholder="V-12345678"></div>
+        <div class="field"><label>Telefono *</label><input type="tel" id="nvTel" placeholder="0414-1234567"></div>
+      </div>
+      <button class="nbtn nbtn-p" onclick="crearClienteVenta()">Guardar cliente</button>
+      <button class="nbtn nbtn-s" onclick="document.getElementById('cliVtaForm').style.display='none'">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- PRODUCTOS -->
+  <div class="section">
+    <div class="stitle">Productos</div>
+    <div class="field wrap">
+      <label>Buscar producto</label>
+      <input type="search" id="prodSearch" placeholder="Nombre, codigo o marca..." autocomplete="off" autocorrect="off" spellcheck="false">
+      <div class="drop" id="prodDrop"></div>
+    </div>
+    <div id="cartEl"><div class="cart-empty">Sin productos aun</div></div>
+  </div>
+
+  <!-- TOTALES -->
+  <div class="tbar" id="tbar">
+    <div class="trow"><span class="tlbl">Base imponible</span><span class="tval" id="tBase">$0.00</span></div>
+    <div class="trow"><span class="tlbl">IVA 16%</span><span class="tval" id="tIVA">$0.00</span></div>
+    <div class="trow"><span class="tlbl">Total USD</span><span class="tval" id="tUSD">$0.00</span></div>
+    <div class="trow"><span class="tlbl">Total Bs</span><span class="tval big" id="tBS">Bs 0</span></div>
+    <div class="trow" id="tComRow" style="display:none"><span class="tlbl">Comision punto</span><span class="tval red" id="tCom"></span></div>
+    <div class="trow" id="tNetRow" style="display:none"><span class="tlbl">Neto recibido</span><span class="tval" id="tNet"></span></div>
+  </div>
+
+  <!-- FORMA DE PAGO -->
+  <div class="section">
+    <div class="stitle">Forma de Pago</div>
+    <div id="pagosEl"></div>
+    <button class="addpbtn" onclick="addPago()">+ Agregar forma de pago</button>
+  </div>
+
+  <!-- FACTURAR -->
+  <div class="section">
+    <div class="stitle">Facturacion</div>
+    <div class="togwrap">
+      <div>
+        <div class="toglbl">Facturar esta venta (con IVA)</div>
+        <div class="togsub" id="factSub">Apagado: nota de entrega, sin IVA</div>
+      </div>
+      <button class="tog" id="factTog" onclick="toggleFacturar()"></button>
+    </div>
+  </div>
+
+  <!-- VENTA A SOCIO -->
+  <div class="section">
+    <div class="stitle">Venta a socio</div>
+    <div class="togwrap">
+      <div>
+        <div class="toglbl">Retiro de socio (a precio de costo)</div>
+        <div class="togsub" id="socioSub">Requiere PIN de socios</div>
+      </div>
+      <button class="tog" id="socioTog" onclick="toggleSocio()"></button>
+    </div>
+    <div class="asel" id="socioSel">
+      <label>Socio que se lleva la mercancia</label>
+      <select id="selSocio" onchange="renderPagos()"><option value="">Seleccionar...</option><option>RODOLFO</option><option>JAVIER</option></select>
+      <div class="cprev">Los precios pasan a costo. Puede pagarse ahora o quedar como cuenta por cobrar del socio (metodo CREDITO).</div>
+    </div>
+  </div>
+
+  <!-- ALIADO -->
+  <div class="section">
+    <div class="stitle">Aliado / Referido</div>
+    <div class="togwrap">
+      <div>
+        <div class="toglbl">Venta referida por aliado?</div>
+        <div class="togsub">Luis (Taller Diesel) · David (Taller Motos)</div>
+      </div>
+      <button class="tog" id="aliadoTog" onclick="toggleAliado()"></button>
+    </div>
+    <div class="asel" id="aliadoSel">
+      <label>Selecciona el aliado</label>
+      <div id="aliadoCards"></div>
+      <div class="cprev" id="comPrev"></div>
+    </div>
+  </div>
+
+  <!-- NOTAS -->
+  <div class="section">
+    <div class="stitle">Notas</div>
+    <textarea id="txtNotas" rows="2" placeholder="Observaciones opcionales..."></textarea>
+  </div>
+
+</div>
+
+<div class="botbar">
+  <button class="subbtn cotbtn" id="btnCot" onclick="abrirCotizacion()">Cotizar</button>
+  <button class="subbtn" id="btnVenta" onclick="guardarVenta()">Registrar Venta</button>
+</div>
+
+<!-- SUCCESS -->
+<div class="success" id="success">
+  <div class="sicon">✅</div>
+  <h2>Venta Registrada!</h2>
+  <p id="successMsg"></p>
+  <button class="sbtn sbtn-y" onclick="abrirNota()">Generar Nota de Entrega</button>
+  <button class="sbtn sbtn-n" onclick="nuevaVenta()">Nueva Venta</button>
+</div>
+
+<!-- NOTA OVERLAY -->
+<div class="overlay" id="notaOv">
+  <div class="sheet">
+    <div class="sheet-title" id="docTitle">Nota de Entrega</div>
+    <div class="sheet-sub" id="docSub">Busca un cliente existente o agrega uno nuevo</div>
+
+    <!-- BUSCAR CLIENTE -->
+    <div class="field wrap" id="cliSearchWrap">
+      <label>Buscar cliente</label>
+      <input type="search" id="cliSearch" placeholder="Nombre, RIF o telefono..." autocomplete="off" autocorrect="off">
+      <div class="drop" id="cliDrop"></div>
+    </div>
+    <div id="cliSelected" style="display:none"></div>
+    <button class="cli-new-btn" id="cliNewBtn" onclick="mostrarFormCliente()">+ Nuevo cliente</button>
+
+    <!-- FORM CLIENTE (oculto por defecto) -->
+    <div id="formCliente" style="display:none">
+      <div class="field"><label>Nombre / Razon Social *</label><input type="text" id="cliNombre" placeholder="Empresa o persona"></div>
+      <div class="row2">
+        <div class="field"><label>Cedula / RIF</label><input type="text" id="cliRif" placeholder="J-12345678-9"></div>
+        <div class="field"><label>Telefono</label><input type="tel" id="cliTel" placeholder="0414-1234567"></div>
+      </div>
+      <div class="field"><label>Direccion</label><input type="text" id="cliDir" placeholder="Av. Principal..."></div>
+      <div class="field"><label>Notas del cliente</label><textarea id="cliNota" rows="2" placeholder="Descuento especial, preferencias..."></textarea></div>
+      <button class="nbtn nbtn-p" onclick="guardarCliente()">Guardar cliente y continuar</button>
+      <button class="nbtn nbtn-s" onclick="ocultarFormCliente()" style="margin-top:0">Cancelar</button>
+    </div>
+
+    <div class="field" id="cotMonedaWrap" style="display:none">
+      <label>Moneda de la cotizacion</label>
+      <select id="selCotMon" onchange="BoPartsDev.localStorage.setItem('boparts_cot_mon', this.value)">
+        <option value="BS">Bolivares (Bs)</option>
+        <option value="USD">Dolares (USD)</option>
+      </select>
+    </div>
+
+    <!-- BOTONES NOTA -->
+    <div id="notaBtns" style="display:none">
+      <button class="nbtn nbtn-p" id="btnDoc" onclick="generarDoc()">Generar y Compartir PDF</button>
+      <button class="nbtn nbtn-p" id="btnFactura" onclick="generarFactura()" style="background:var(--card2);color:var(--brand);border:1.5px solid var(--brand);display:none">Generar FACTURA fiscal</button>
+      <div id="docListo" style="display:none">
+        <button class="nbtn nbtn-w" id="btnCompartir" onclick="compartirPDF()" style="display:block">Compartir PDF (Gmail, WhatsApp...)</button>
+        <button class="nbtn nbtn-s" onclick="verPDF()">Ver / Descargar PDF</button>
+        <button class="nbtn nbtn-s" id="waBtnNota" onclick="abrirWA()" style="display:block">Solo mensaje por WhatsApp</button>
+      </div>
+      <button class="nbtn nbtn-s" id="btnCerrarDoc" onclick="cerrarNota()">Omitir - Nueva Venta</button>
+    </div>
+    <button class="nbtn nbtn-s" id="cotSinCliente" onclick="cotizarSinCliente()" style="display:none">Cotizar sin datos del cliente</button>
+    <button class="nbtn nbtn-s" id="skipNota" onclick="cerrarNota()">Omitir - Nueva Venta</button>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast" onclick="this.className='toast'"></div>
+
+<!-- FAB NAV -->
+<button class="fab" onclick="toggleNav()">
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.5" stroke-linecap="round">
+    <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+  </svg>
+</button>
+<div class="nav-ov" id="navOv" onclick="closeNav()"></div>
+<div class="nav-pan" id="navPan">
+  <div class="nav-t">Repuesto BoParts</div>
+  <div class="nav-g">
+    <a class="ncard" href="index.html">
+      <span class="nicon">📋</span>
+      <span class="nlbl">Lista de Precios</span>
+      <span class="ndesc">Consulta y busqueda</span>
+    </a>
+    <a class="ncard cur" href="boparts_ventas.html">
+      <span class="nicon">💰</span>
+      <span class="nlbl">Registrar Venta</span>
+      <span class="ndesc">Nueva venta</span>
+    </a>
+    <a class="ncard" href="boparts_fotos.html">
+      <span class="nicon">📷</span>
+      <span class="nlbl">Cargar Fotos</span>
+      <span class="ndesc">Catalogo imagenes</span>
+    </a>
+    <a class="ncard" href="boparts_demanda.html">
+      <span class="nicon">📝</span>
+      <span class="nlbl">Demanda</span>
+      <span class="ndesc">No atendida</span>
+    </a>
+    <a class="ncard" href="boparts_compras.html">
+      <span class="nicon">📦</span>
+      <span class="nlbl">Compras</span>
+      <span class="ndesc">Recibir mercancia</span>
+    </a>
+    <a class="ncard" href="boparts_gastos.html">
+      <span class="nicon">💸</span>
+      <span class="nlbl">Gastos</span>
+      <span class="ndesc">Registrar gasto</span>
+    </a>
+    <a class="ncard" href="boparts_cobros.html">
+      <span class="nicon">🧾</span>
+      <span class="nlbl">Cobros</span>
+      <span class="ndesc">Cuentas por cobrar</span>
+    </a>
+    <a class="ncard" href="boparts_gerencia.html">
+      <span class="nicon">📊</span>
+      <span class="nlbl">Gerencia</span>
+      <span class="ndesc">Solo socios</span>
+    </a>
+    <a class="ncard" href="boparts_apartados.html">
+      <span class="nicon">🔖</span>
+      <span class="nlbl">Apartados</span>
+      <span class="ndesc">Y contra pedido</span>
+    </a>
+    <a class="ncard" href="boparts_devoluciones.html">
+      <span class="nicon">↩️</span>
+      <span class="nlbl">Devoluciones</span>
+      <span class="ndesc">Y cambios</span>
+    </a>
+    <a class="ncard" href="boparts_inventario.html">
+      <span class="nicon">🧮</span>
+      <span class="nlbl">Inventario</span>
+      <span class="ndesc">Conteo de stock</span>
+    </a>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONFIG
+// ============================================================
+var CSV_URL     = BoPartsDev.csvUrl('products');
+var CLIENTES_URL= BoPartsDev.csvUrl('clients');
+var SCRIPT_URL  = BoPartsDev.apiUrl;
+var APP_VERSION = 'v13.2';
+var TASA        = parseFloat(BoPartsDev.localStorage.getItem('motoauto_tasa') || '0');
+var TASA_ORIGEN = TASA ? 'guardada' : 'ninguna';
+
+var IVA_PCT   = 16;                       // alicuota general; todo el catalogo es gravado
+var TASA_BCV  = parseFloat(BoPartsDev.localStorage.getItem('boparts_bcv') || '0');
+var BCV_FECHA = BoPartsDev.localStorage.getItem('boparts_bcv_fecha') || '';
+
+// La tasa la fijan los socios desde Gerencia y vive en CONFIG: aqui solo se lee y se guarda por si no hay senal.
+function sincronizarTasa() {
+  BoPartsDev.fetch(SCRIPT_URL + '?action=config&t=' + Date.now())
+    .then(leerJSON)
+    .then(function(d) {
+      if (!d || !d.ok) return;
+      if (d.bcv > 0) {
+        TASA_BCV = d.bcv; BCV_FECHA = d.bcvFecha || '';
+        try { BoPartsDev.localStorage.setItem('boparts_bcv', String(TASA_BCV)); BoPartsDev.localStorage.setItem('boparts_bcv_fecha', BCV_FECHA); } catch (e) {}
+      }
+      if (!(d.tasa > 0) || d.tasa === TASA) { updateTotals(); return; }
+      TASA = d.tasa; TASA_ORIGEN = 'CONFIG';
+      try { BoPartsDev.localStorage.setItem('motoauto_tasa', String(TASA)); } catch (e) {}
+      renderCart(); updateTotals();
+      toast('Tasa actualizada: ' + TASA, 'ok');
+    })
+    .catch(function() {});
+}
+var NOTA_NUM    = parseInt(BoPartsDev.localStorage.getItem('boparts_nota_num') || '0');
+
+// ============================================================
+// HARDCODED DATA (safe, rarely changes)
+// ============================================================
+var METODOS = [
+  {label:'Efectivo USD',        metodo:'Efectivo',        banco:'',                     moneda:'USD', fijo:0,    pct:0  },
+  {label:'Efectivo Bs',         metodo:'Efectivo',        banco:'',                     moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Pago Movil Banesco',  metodo:'Pago Movil',      banco:'Banesco',               moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Pago Movil Bancrecer',metodo:'Pago Movil',      banco:'Bancrecer',             moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Punto Bancamiga',     metodo:'Punto de Venta',  banco:'Bancamiga',             moneda:'BS',  fijo:1000, pct:1.5},
+  {label:'Punto Bancrecer Emp.',metodo:'Punto de Venta',  banco:'Bancrecer Empresarial', moneda:'BS',  fijo:0,    pct:0  },
+  {label:'Cashea Bancrecer',    metodo:'Cashea',          banco:'Bancrecer Empresarial', moneda:'BS',  fijo:0,    pct:0  },
+  {label:'CREDITO (cuenta por cobrar)', metodo:'Credito', banco:'',                     moneda:'USD', fijo:0,    pct:0, credito:true }
+];
+
+var ALIADOS = [
+  {id:'AL-001', nombre:'Luis',  negocio:'Taller Diesel', pct:5},
+  {id:'AL-002', nombre:'David', negocio:'Taller Motos',  pct:5}
+];
+
+// ============================================================
+// STATE
+// ============================================================
+var PRODUCTS = [];
+var CLIENTES = [];
+var cart      = [];
+var pagos     = [];
+var pid       = 0;
+var aliadoOn  = false;
+var aliadoSel = null;
+var cliSel    = null;
+var lastCart  = [];
+
+// ============================================================
+// INIT
+// ============================================================
+document.getElementById('fechaHdr').textContent =
+  APP_VERSION + ' · ' + new Date().toLocaleDateString('es-VE', {weekday:'long', day:'numeric', month:'long'});
+
+loadProducts();
+sincronizarTasa();
+loadClientes();
+addPago();
+
+// ============================================================
+// CSV PARSER
+// ============================================================
+function parseCSV(txt) {
+  var rows = [];
+  var lines = txt.split(/\r?\n/);
+  for (var i = 0; i < lines.length; i++) {
+    var row = [], cur = '', q = false;
+    for (var c = 0; c < lines[i].length; c++) {
+      var ch = lines[i][c];
+      if (ch === '"') { q = !q; }
+      else if (ch === ',' && !q) { row.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    row.push(cur.trim());
+    rows.push(row);
+  }
+  return rows;
+}
+
+function isValidCSV(txt) {
+  if (!txt) return false;
+  var t = txt.trim().substring(0, 10).toLowerCase();
+  return !(t.indexOf('<!doc') === 0 || t.indexOf('<html') === 0 ||
+           t.indexOf('function') === 0 || t.indexOf('var ') === 0);
+}
+
+// ============================================================
+// LOAD PRODUCTS
+// ============================================================
+function loadProducts() {
+  // Use sessionStorage cache from index.html first
+  var cached = BoPartsDev.sessionStorage.getItem('motoauto_csv');
+  if (cached && isValidCSV(cached)) {
+    parseProducts(cached);
+  }
+  // Always refresh in background
+  BoPartsDev.fetch(CSV_URL + '&t=' + Date.now())
+    .then(function(r) { return r.text(); })
+    .then(function(txt) {
+      if (!isValidCSV(txt)) return;
+      BoPartsDev.sessionStorage.setItem('motoauto_csv', txt);
+      parseProducts(txt);
+    })
+    .catch(function() {});
+}
+
+function parseProducts(txt) {
+  var rows = parseCSV(txt);
+  var loaded = [];
+  // Tasa de respaldo: fila 1, columna E de la hoja (misma celda que usa index.html)
+  var tasaHoja = parseNum(rows[0] && rows[0][4]);
+  if (!TASA && tasaHoja > 1) { TASA = tasaHoja; TASA_ORIGEN = 'hoja'; }
+  for (var i = 2; i < rows.length; i++) {
+    var r = rows[i];
+    var prod = (r[2] || '').trim();
+    if (!prod) continue;
+    if (prod.indexOf('{') >= 0 || prod.indexOf('function') >= 0) continue;
+    var precio = parseNum(r[8]);
+    if (precio > 5000) continue;
+    loaded.push({
+      codigo:   (r[0] || '').trim(),
+      marca:    (r[1] || '').trim(),
+      producto: prod,
+      categoria:(r[3] || '').trim(),
+      precio:   precio,
+      costo:    parseNum(r[7])         // Costo Final (col H), viene como texto '$ 6.04'. No se muestra al vendedor.
+    });
+  }
+  if (loaded.length > 10) PRODUCTS = loaded;
+}
+
+// ============================================================
+// LOAD CLIENTES
+// ============================================================
+var clientesEstado = 'cargando';   // 'cargando' | 'ok' | 'error: ...'
+var clientesIntentos = 0;
+function filaCliente(r) {
+  return {
+    nombre: (r[0] || '').trim(), rif: (r[1] || '').trim(), tel: (r[2] || '').trim(), dir: (r[3] || '').trim(), nota: (r[4] || '').trim(),
+    credito: (r[6] || '').trim().toUpperCase() === 'SI',  // col G de CLIENTES, la marcan Rodolfo/Javier
+    limite:  parseNum(r[7]),                              // col H: tope de deuda en USD (0 = sin tope definido)
+    dias:    parseNum(r[8])                               // col I: plazo acordado
+  };
+}
+function clientesCargados(loaded, origen) {
+  if (loaded.length) { CLIENTES = loaded; try { BoPartsDev.localStorage.setItem('boparts_clientes', JSON.stringify(loaded)); } catch (e) {} }
+  clientesListos = true; clientesEstado = 'ok (' + origen + ', ' + loaded.length + ')';
+}
+function loadClientes() {
+  clientesIntentos++;
+  BoPartsDev.fetch(CLIENTES_URL + '&t=' + Date.now())
+    .then(function(r) { if (!r.ok) throw new Error('CSV HTTP ' + r.status); return r.text(); })
+    .then(function(txt) {
+      if (!isValidCSV(txt)) throw new Error('CSV invalido');
+      var rows = parseCSV(txt), loaded = [];
+      for (var i = 1; i < rows.length; i++) { var c = filaCliente(rows[i]); if (c.nombre) loaded.push(c); }
+      clientesCargados(loaded, 'hoja');
+    })
+    .catch(function(e1) {
+      // Respaldo: pedir la lista a Apps Script (v10.5+). Si tampoco, reintentar en 5 s.
+      BoPartsDev.fetch(SCRIPT_URL + '?action=clientes&t=' + Date.now())
+        .then(leerJSON)
+        .then(function(d) {
+          if (!d || !d.ok || !d.clientes) throw new Error('script sin clientes');
+          clientesCargados(d.clientes.map(filaCliente), 'script');
+        })
+        .catch(function(e2) {
+          clientesEstado = 'error: ' + (e1 && e1.message ? e1.message : e1) + ' / ' + (e2 && e2.message ? e2.message : e2);
+          if (clientesIntentos < 6) setTimeout(loadClientes, 5000);
+        });
+    });
+}
+var clientesListos = false;
+// Arranca con la ultima lista guardada en el telefono mientras llega la de la hoja
+try { var _cc = JSON.parse(BoPartsDev.localStorage.getItem('boparts_clientes') || '[]'); if (_cc.length) CLIENTES = _cc; } catch (e) {}
+
+// ============================================================
+// HELPERS
+// ============================================================
+function norm(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function fmtBS(n) { return 'Bs ' + Math.round(n).toLocaleString('es-VE'); }
+function fmtUSD(n) { return '$' + Number(n).toFixed(2); }
+
+// ============================================================
+// PRODUCT SEARCH
+// ============================================================
+var prodSearch = document.getElementById('prodSearch');
+var prodDrop   = document.getElementById('prodDrop');
+
+prodSearch.addEventListener('input', function() {
+  var q = norm(prodSearch.value).trim();
+  if (q.length < 2) { prodDrop.classList.remove('open'); return; }
+  var terms = q.split(/\s+/);
+  var res = [];
+  for (var i = 0; i < PRODUCTS.length && res.length < 15; i++) {
+    var p = PRODUCTS[i];
+    var hay = norm(p.producto + ' ' + p.codigo + ' ' + p.marca);
+    var ok = true;
+    for (var t = 0; t < terms.length; t++) { if (hay.indexOf(terms[t]) < 0) { ok = false; break; } }
+    if (ok) res.push({p:p, idx:i});
+  }
+  if (!res.length) { prodDrop.classList.remove('open'); return; }
+  var html = '';
+  for (var i = 0; i < res.length; i++) {
+    var p = res[i].p, idx = res[i].idx;
+    html += '<div class="ditem" onclick="addToCart(' + idx + ')">' +
+      '<span class="ditem-price">' + fmtUSD(p.precio) + '</span>' +
+      escHtml(p.producto) +
+      '<div class="ditem-meta">' + escHtml(p.categoria) + (p.codigo ? ' · #' + escHtml(p.codigo) : '') + '</div>' +
+    '</div>';
+  }
+  prodDrop.innerHTML = html;
+  prodDrop.classList.add('open');
+});
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.wrap')) {
+    prodDrop.classList.remove('open');
+    document.getElementById('cliDrop').classList.remove('open');
+  }
+});
+
+// ============================================================
+// CART
+// ============================================================
+function addToCart(idx) {
+  var p = PRODUCTS[idx];
+  for (var i = 0; i < cart.length; i++) {
+    if (cart[i].producto === p.producto && cart[i].codigo === p.codigo) {
+      cart[i].cantidad++;
+      prodSearch.value = ''; prodDrop.classList.remove('open');
+      renderCart(); updateTotals(); return;
+    }
+  }
+  cart.push({producto:p.producto, codigo:p.codigo, precio:(modoSocio ? (p.costo || 0) : p.precio), costo:p.costo||0, cantidad:1});
+  prodSearch.value = ''; prodDrop.classList.remove('open');
+  renderCart(); updateTotals();
+}
+function delCart(i)  { cart.splice(i, 1); renderCart(); updateTotals(); }
+function qUp(i)      { cart[i].cantidad++; renderCart(); updateTotals(); }
+function qDn(i)      { if (cart[i].cantidad > 1) { cart[i].cantidad--; renderCart(); updateTotals(); } }
+function setQ(i, v)  { cart[i].cantidad = parseInt(v) || 1; updateTotals(); }
+function setP(i, v)  { cart[i].precio   = parseFloat(v) || 0; updateTotals(); }
+
+function renderCart() {
+  var el = document.getElementById('cartEl');
+  if (!cart.length) {
+    el.innerHTML = '<div class="cart-empty">Sin productos aun</div>';
+    document.getElementById('tbar').style.display = 'none';
+    return;
+  }
+  document.getElementById('tbar').style.display = 'block';
+  var h = '';
+  for (var i = 0; i < cart.length; i++) {
+    var c = cart[i];
+    h += '<div class="citem">' +
+      '<div class="ctop">' +
+        '<div class="cname">' + escHtml(c.producto) + '</div>' +
+        '<button class="cdel" onclick="delCart(' + i + ')">&#x2715;</button>' +
+      '</div>' +
+      '<div class="cbot">' +
+        '<div><label>Cant.</label>' +
+          '<div class="qwrap">' +
+            '<button class="qbtn" onclick="qDn(' + i + ')">&#x2212;</button>' +
+            '<input class="qin" type="number" value="' + c.cantidad + '" onchange="setQ(' + i + ',this.value)">' +
+            '<button class="qbtn" onclick="qUp(' + i + ')">+</button>' +
+          '</div>' +
+        '</div>' +
+        '<div><label>Precio USD</label>' +
+          '<input type="number" value="' + c.precio.toFixed(2) + '" step="0.01" onchange="setP(' + i + ',this.value)" style="text-align:center">' +
+        '</div>' +
+        '<div><label>Subtotal</label>' +
+          '<div class="csub">' + fmtUSD(c.precio * c.cantidad) + '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+  el.innerHTML = h;
+}
+
+// ============================================================
+// TOTALS
+// ============================================================
+function updateTotals() {
+  // Los precios de la lista son SIN IVA: la base es la suma del carrito y el IVA se agrega encima.
+  var base = baseCarritoUSD();
+  var iva = FACTURAR ? Math.round(base * IVA_PCT) / 100 : 0;
+  var usd = Math.round((base + iva) * 100) / 100;
+  var bs = Math.round(usd * TASA);
+  document.getElementById('tBase').textContent = fmtUSD(base);
+  document.getElementById('tIVA').textContent  = fmtUSD(iva);
+  document.getElementById('tBase').parentNode.style.display = FACTURAR ? 'flex' : 'none';
+  document.getElementById('tIVA').parentNode.style.display  = FACTURAR ? 'flex' : 'none';
+  document.getElementById('tUSD').textContent = fmtUSD(usd);
+  document.getElementById('tBS').textContent  = fmtBS(bs);
+
+  var com = 0;
+  for (var i = 0; i < pagos.length; i++) {
+    if (!pagos[i].metodoData) continue;
+    var mEl = document.getElementById('monto_' + pagos[i].id);
+    var monto = mEl ? parseFloat(mEl.value) || 0 : 0;
+    if (monto > 0) com += pagos[i].metodoData.fijo + monto * pagos[i].metodoData.pct / 100;
+  }
+  // v10.4: la comision del punto la asume la tienda; se calcula y se guarda, pero no se muestra al vender
+  document.getElementById('tCom').textContent = fmtBS(com);
+  document.getElementById('tNet').textContent = fmtBS(bs - com);
+  document.getElementById('tComRow').style.display = 'none';
+  document.getElementById('tNetRow').style.display = 'none';
+  if (aliadoSel) updateComPrev();
+}
+
+// ============================================================
+// PAYMENT METHODS
+// ============================================================
+function addPago() {
+  syncPagosDesdeDOM();
+  pid++;
+  pagos.push({id:pid, metodoData:null, metIdx:'', monto:'', moneda:'BS'});
+  renderPagos();
+}
+
+function delPago(id) {
+  syncPagosDesdeDOM();
+  pagos = pagos.filter(function(p) { return p.id !== id; });
+  renderPagos(); updateTotals();
+}
+
+// Guarda en memoria lo que el vendedor escribio, para que re-dibujar no lo borre
+function syncPagosDesdeDOM() {
+  for (var i = 0; i < pagos.length; i++) {
+    var p = pagos[i];
+    var metEl = document.getElementById('met_' + p.id), mEl = document.getElementById('monto_' + p.id), monEl = document.getElementById('mon_' + p.id);
+    if (metEl) p.metIdx = metEl.value;
+    if (mEl) p.monto = mEl.value;
+    if (monEl) p.moneda = monEl.value;
+  }
+}
+function baseCarritoUSD() {
+  var b = 0;
+  for (var i = 0; i < cart.length; i++) b += cart[i].precio * cart[i].cantidad;
+  return Math.round(b * 100) / 100;
+}
+// Lo que el cliente paga: base, mas IVA solo si la venta se factura
+function totalCarritoUSD() {
+  var b = baseCarritoUSD();
+  return Math.round((b + (FACTURAR ? b * IVA_PCT / 100 : 0)) * 100) / 100;
+}
+
+function renderPagos() {
+  var el = document.getElementById('pagosEl');
+  var h = '';
+  for (var i = 0; i < pagos.length; i++) {
+    var p = pagos[i];
+    var delBtn = pagos.length > 1 ? '<button class="pdel" onclick="delPago(' + p.id + ')">&#x2715;</button>' : '';
+    var mi = String(p.metIdx === undefined ? '' : p.metIdx);
+    var opts = '<option value="">Seleccionar...</option>';
+    for (var j = 0; j < METODOS.length; j++) {
+      opts += '<option value="' + j + '"' + (mi === String(j) ? ' selected' : '') + '>' + escHtml(METODOS[j].label) + '</option>';
+    }
+    var mon = p.moneda || 'BS';
+    h += '<div class="pblock" id="pb_' + p.id + '">' + delBtn +
+      '<div class="field"><label>Metodo de pago</label>' +
+        '<select id="met_' + p.id + '" onchange="onMet(' + p.id + ')">' + opts + '</select>' +
+      '</div>' +
+      '<div class="row2">' +
+        '<div class="field"><label>Monto</label>' +
+          '<input type="number" id="monto_' + p.id + '" placeholder="0.00" step="0.01" value="' + escHtml(p.monto || '') + '" oninput="syncPagosDesdeDOM();updateTotals()">' +
+        '</div>' +
+        '<div class="field"><label>Moneda</label>' +
+          '<select id="mon_' + p.id + '" onchange="syncPagosDesdeDOM();updateTotals()">' +
+            '<option value="BS"' + (mon === 'BS' ? ' selected' : '') + '>Bs</option><option value="USD"' + (mon === 'USD' ? ' selected' : '') + '>USD</option>' +
+          '</select>' +
+        '</div>' +
+      '</div>' +
+      '<div id="cominf_' + p.id + '"></div>' +
+      '<div id="cred_' + p.id + '"></div>' +
+    '</div>';
+  }
+  el.innerHTML = h;
+  // Restaurar metodoData y el selector de credito de cada bloque
+  for (var k = 0; k < pagos.length; k++) {
+    var q = pagos[k], idx = parseInt(q.metIdx);
+    q.metodoData = (!isNaN(idx) && METODOS[idx]) ? METODOS[idx] : null;
+    if (q.metodoData && q.metodoData.credito) renderCredito(q.id, true);
+  }
+}
+
+function onMet(id) {
+  var sel = document.getElementById('met_' + id);
+  var idx = parseInt(sel.value);
+  var pago = null;
+  for (var i = 0; i < pagos.length; i++) { if (pagos[i].id === id) { pago = pagos[i]; break; } }
+  if (!pago) return;
+  if (isNaN(idx) || idx < 0) { pago.metodoData = null; return; }
+  var m = METODOS[idx];
+  pago.metodoData = m;
+  document.getElementById('mon_' + id).value = m.moneda;
+  renderCredito(id, !!m.credito);
+  var inf = document.getElementById('cominf_' + id);
+  inf.innerHTML = '';
+  // Sugerir el monto que falta por cubrir, en la moneda del metodo (el vendedor puede cambiarlo)
+  var mEl = document.getElementById('monto_' + id);
+  if (mEl && !(parseFloat(mEl.value) > 0)) {
+    var falta = totalCarritoUSD() - sumaPagosUSD();
+    if (falta > 0.009) mEl.value = m.moneda === 'BS' ? String(Math.round(falta * TASA)) : String(Math.round(falta * 100) / 100);
+  }
+  syncPagosDesdeDOM();
+  updateTotals();
+}
+
+// ============================================================
+// CLIENTE DE LA VENTA (v12): toda venta lleva cliente. Se busca por telefono, cedula o nombre.
+// ============================================================
+var clienteVenta = null, cliVtaRes = [];
+var cliVtaEl = document.getElementById('cliVta'), cliVtaDrop = document.getElementById('cliVtaDrop');
+cliVtaEl.addEventListener('input', function() {
+  var q = norm(cliVtaEl.value).trim(), qd = cliVtaEl.value.replace(/[^0-9]/g, '');
+  if (!q) { cliVtaDrop.classList.remove('open'); return; }
+  cliVtaRes = CLIENTES.filter(function(c) {
+    if (qd.length >= 4) return (c.tel || '').replace(/[^0-9]/g, '').indexOf(qd) >= 0 || (c.rif || '').replace(/[^0-9]/g, '').indexOf(qd) >= 0;
+    return norm(c.nombre + ' ' + c.rif + ' ' + c.tel).indexOf(q) >= 0;
+  }).slice(0, 8);
+  var h = '';
+  cliVtaRes.forEach(function(c, i) {
+    h += '<div class="ditem" onclick="selClienteVenta(' + i + ')">' + escHtml(c.nombre) +
+      '<div class="ditem-meta">' + escHtml(c.rif || 'sin cedula') + (c.tel ? ' · ' + escHtml(c.tel) : '') + (c.credito ? ' · CREDITO' : '') + '</div></div>';
+  });
+  h += '<div class="ditem" onclick="nuevoClienteVenta()" style="color:var(--brand);font-weight:600">+ Cliente nuevo</div>';
+  cliVtaDrop.innerHTML = h; cliVtaDrop.classList.add('open');
+});
+function selClienteVenta(i) {
+  clienteVenta = cliVtaRes[i];
+  cliVtaDrop.classList.remove('open'); cliVtaEl.value = '';
+  pintarClienteVenta();
+}
+var saldoCliente = 0;
+// Cuanto debe hoy el cliente elegido, para comparar con su limite antes de dar mas credito.
+function cargarSaldoCliente() {
+  saldoCliente = 0;
+  if (!clienteVenta) return;
+  BoPartsDev.fetch(SCRIPT_URL + '?action=cxc&cliente=' + encodeURIComponent(clienteVenta.nombre) + '&t=' + Date.now())
+    .then(leerJSON)
+    .then(function(d) {
+      if (!d || !d.ok || !d.clientes || !d.clientes.length) return;
+      saldoCliente = parseNum(d.clientes[0].saldoUSD);
+      renderPagos();
+    })
+    .catch(function() {});
+}
+
+function irACliente() {
+  var el = document.getElementById('secCliente');
+  if (el && el.scrollIntoView) el.scrollIntoView({behavior:'smooth'});
+}
+function pintarClienteVenta() {
+  var el = document.getElementById('cliVtaSel');
+  if (!clienteVenta) { el.style.display = 'none'; document.getElementById('cliVtaWrap').style.display = 'block'; return; }
+  var extra = clienteVenta.credito ? ' · credito' + (clienteVenta.limite ? ' hasta ' + fmtUSD(clienteVenta.limite) : '') : '';
+  el.innerHTML = '<div class="cli-result"><div><div class="cli-info">' + escHtml(clienteVenta.nombre) + '</div>' +
+    '<div class="cli-sub">' + escHtml(clienteVenta.rif || 'sin cedula') + (clienteVenta.tel ? ' · ' + escHtml(clienteVenta.tel) : '') + extra + '</div></div>' +
+    '<button class="cli-clear" onclick="clienteVenta=null;pintarClienteVenta();renderPagos()">&#x2715;</button></div>';
+  el.style.display = 'block';
+  document.getElementById('cliVtaWrap').style.display = 'none';
+  cargarSaldoCliente();
+  renderPagos();
+}
+function nuevoClienteVenta() {
+  cliVtaDrop.classList.remove('open');
+  var v = cliVtaEl.value.trim(), d = v.replace(/[^0-9]/g, '');
+  document.getElementById('nvNombre').value = d ? '' : v;
+  document.getElementById('nvTel').value = (d.length >= 10) ? v : '';
+  document.getElementById('nvCed').value = (d.length && d.length < 10) ? v : '';
+  document.getElementById('cliVtaForm').style.display = 'block';
+}
+function crearClienteVenta() {
+  var c = {nombre:document.getElementById('nvNombre').value.trim(), rif:document.getElementById('nvCed').value.trim(),
+           tel:document.getElementById('nvTel').value.trim(), dir:'', nota:'', credito:false, limite:0, dias:0};
+  if (!c.nombre) { toast('Escribe el nombre y apellido', 'err'); return; }
+  if (!c.rif && !c.tel) { toast('Hace falta la cedula o el telefono', 'err'); return; }
+  var dupe = CLIENTES.filter(function(x) {
+    var a = (x.tel || '').replace(/[^0-9]/g, ''), b = (c.tel || '').replace(/[^0-9]/g, '');
+    var e = (x.rif || '').replace(/[^0-9]/g, ''), f = (c.rif || '').replace(/[^0-9]/g, '');
+    return (b && a === b) || (f && e === f);
+  })[0];
+  if (dupe) { toast('Ese telefono o cedula ya es de ' + dupe.nombre, 'err'); clienteVenta = dupe; document.getElementById('cliVtaForm').style.display = 'none'; pintarClienteVenta(); return; }
+  CLIENTES.push(c); clienteVenta = c;
+  document.getElementById('cliVtaForm').style.display = 'none';
+  pintarClienteVenta();
+  postScript({tipo:'cliente', nombre:c.nombre, rif:c.rif, tel:c.tel, fecha:new Date().toLocaleDateString('es-VE')})
+    .then(function(d) { toast(d && d.ok ? 'Cliente guardado' : 'Cliente NO guardado en la hoja', d && d.ok ? 'ok' : 'err'); })
+    .catch(function() { toast('Cliente NO guardado (sin conexion)', 'err'); });
+}
+
+// ============================================================
+// VENTA A SOCIO (v11): precio de costo y canal SOCIO. Protegido con el PIN de socios
+// para que el costo no quede a la vista de cualquiera que use la app.
+// ============================================================
+// Facturar: decide si la venta lleva IVA y si se puede emitir factura fiscal.
+var FACTURAR = false;
+function toggleFacturar() {
+  FACTURAR = !FACTURAR;
+  document.getElementById('factTog').classList.toggle('on', FACTURAR);
+  document.getElementById('factSub').textContent = FACTURAR
+    ? 'Se agrega IVA 16% y se puede emitir la factura'
+    : 'Apagado: nota de entrega, sin IVA';
+  updateTotals();
+}
+
+var modoSocio = false;
+var PIN_HASH_SOCIOS = 911136;   // mismo PIN que Gerencia
+function hashPin(t) { var h = 5381; for (var i = 0; i < t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0; return h % 1000000; }
+function toggleSocio() {
+  if (!modoSocio) {
+    var pin = prompt('PIN de socios para vender a costo:');   // se pide siempre, no se recuerda
+    if (pin === null) return;
+    if (hashPin(String(pin).trim()) !== PIN_HASH_SOCIOS) { toast('PIN incorrecto', 'err'); return; }
+  }
+  modoSocio = !modoSocio;
+  document.getElementById('socioTog').classList.toggle('on', modoSocio);
+  document.getElementById('socioSel').classList.toggle('open', modoSocio);
+  document.getElementById('socioSub').textContent = modoSocio ? 'Los precios del carrito estan a costo' : 'Requiere PIN de socios';
+  var selC = document.getElementById('selC');
+  if (modoSocio) { if (!selC.querySelector('option[value="SOCIO"]')) selC.insertAdjacentHTML('beforeend', '<option value="SOCIO">SOCIO (retiro a costo)</option>'); selC.value = 'SOCIO'; }
+  else { var op = selC.querySelector('option[value="SOCIO"]'); if (op) op.remove(); selC.value = ''; }
+  renderPagos();   // el bloque de credito muestra al socio en vez del buscador de clientes
+  aplicarCostos();
+}
+// Con el modo activo cada linea toma su costo; al desactivar vuelve al precio de lista.
+function aplicarCostos() {
+  for (var i = 0; i < cart.length; i++) {
+    var c = cart[i];
+    c.precio = modoSocio ? (parseFloat(c.costo) || 0) : precioLista(c);
+  }
+  renderCart(); updateTotals();
+}
+function precioLista(c) {
+  var p = PRODUCTS.filter(function(x) { return x.codigo === c.codigo && x.producto === c.producto; })[0];
+  return p ? (parseFloat(p.precio) || 0) : (parseFloat(c.precio) || 0);
+}
+
+// ============================================================
+// CREDITO: cliente autorizado (CLIENTES col G = SI)
+// ============================================================
+var credRes = [];
+function renderCredito(pagoId, on) {
+  var box = document.getElementById('cred_' + pagoId);
+  if (!box) return;
+  if (!on) { box.innerHTML = ''; return; }
+  if (modoSocio) {
+    var sName = document.getElementById('selSocio').value;
+    box.innerHTML = '<div class="cominfo">Queda como cuenta por cobrar del socio' + (sName ? ': <b>' + escHtml(sName) + '</b>' : '. Elige el socio arriba.') + '</div>';
+    return;
+  }
+  // v12: el credito va al cliente de la venta, que ya se eligio arriba
+  if (clienteVenta) {
+    if (!clienteVenta.credito) {
+      box.innerHTML = '<div class="cominfo" style="border-left-color:var(--red)">' + escHtml(clienteVenta.nombre) +
+        ' no esta autorizado para credito. Un socio lo autoriza desde Gerencia.</div>';
+    } else {
+      var lim2 = parseNum(clienteVenta.limite);
+      var pasa = lim2 > 0 && saldoCliente >= lim2;
+      box.innerHTML = '<div class="cominfo"' + (pasa ? ' style="border-left-color:var(--red)"' : '') + '>Cuenta por cobrar de <b>' + escHtml(clienteVenta.nombre) + '</b>' +
+        (saldoCliente ? ' · ya debe ' + fmtUSD(saldoCliente) : '') +
+        (lim2 ? ' · limite ' + fmtUSD(lim2) : ' · sin limite definido') +
+        (clienteVenta.dias ? ' · ' + clienteVenta.dias + ' dias' : '') +
+        (pasa ? '<br>Ya alcanzo su limite: hara falta el PIN de un socio.' : '') + '</div>';
+    }
+    return;
+  }
+  box.innerHTML = '<div class="cominfo" style="border-left-color:var(--red)">Elige primero el cliente, arriba.</div>';
+  var autorizados = CLIENTES.filter(function(c) { return c.credito; });   // columna CREDITO = SI
+  if (!autorizados.length) {
+    if (!clientesListos) {
+      box.innerHTML = '<div class="cominfo">Cargando clientes... <span style="color:var(--ink-muted)">' + escHtml(clientesEstado) + '</span>' +
+        (clientesEstado.indexOf('error') === 0 ? ' <a href="#" onclick="clientesIntentos=0;loadClientes();return false" style="color:var(--brand)">Reintentar</a>' : '') + '</div>';
+      setTimeout(function() { renderCredito(pagoId, true); }, 2000);
+      return;
+    }
+    box.innerHTML = '<div class="cominfo" style="border-left-color:var(--red)">No hay clientes autorizados para credito. Rodolfo o Javier deben marcar SI en la columna CREDITO de la hoja CLIENTES.</div>';
+    return;
+  }
+  var sel = cliSel && cliSel.credito ? cliSel : null;
+  if (sel) {
+    box.innerHTML = '<div class="cli-result" style="margin-top:8px"><div><div class="cli-info">' + escHtml(sel.nombre) + '</div>' +
+      '<div class="cli-sub">Cliente a credito' + (sel.rif ? ' · ' + sel.rif : '') + '</div></div>' +
+      '<button class="cli-clear" onclick="limpiarCredito(' + pagoId + ')">&#x2715;</button></div>' +
+      '<div class="cominfo">El monto queda como deuda en USD. Se cobra desde Cobros.</div>';
+    return;
+  }
+  box.innerHTML = '<div class="field wrap" style="margin-top:8px"><label>Cliente autorizado *</label>' +
+    '<input type="search" id="credSearch_' + pagoId + '" placeholder="Nombre o RIF del cliente..." autocomplete="off" oninput="buscarCredito(' + pagoId + ')">' +
+    '<div class="drop" id="credDrop_' + pagoId + '"></div></div>';
+}
+function buscarCredito(pagoId) {
+  var q = norm(document.getElementById('credSearch_' + pagoId).value).trim();
+  var drop = document.getElementById('credDrop_' + pagoId);
+  credRes = CLIENTES.filter(function(c) { return c.credito && (!q || norm(c.nombre + ' ' + c.rif).indexOf(q) >= 0); }).slice(0, 8);
+  if (!credRes.length) { drop.classList.remove('open'); return; }
+  var h = '';
+  for (var i = 0; i < credRes.length; i++) {
+    h += '<div class="ditem" onclick="selCredito(' + pagoId + ',' + i + ')">' + escHtml(credRes[i].nombre) +
+      '<div class="ditem-meta">' + (credRes[i].rif || '') + (credRes[i].tel ? ' · ' + credRes[i].tel : '') + '</div></div>';
+  }
+  drop.innerHTML = h; drop.classList.add('open');
+}
+function selCredito(pagoId, i) {
+  cliSel = credRes[i];
+  renderCredito(pagoId, true);
+}
+function limpiarCredito(pagoId) {
+  cliSel = null;
+  renderCredito(pagoId, true);
+}
+// Suma de pagos convertida a USD (para validar que cubren el total)
+function sumaPagosUSD() {
+  var t = 0;
+  for (var i = 0; i < pagos.length; i++) {
+    var mEl = document.getElementById('monto_' + pagos[i].id);
+    var monEl = document.getElementById('mon_' + pagos[i].id);
+    var monto = mEl ? parseFloat(mEl.value) || 0 : 0;
+    if (monEl && monEl.value === 'BS') monto = monto / TASA;
+    t += monto;
+  }
+  return t;
+}
+
+// ============================================================
+// ALIADO
+// ============================================================
+function toggleAliado() {
+  aliadoOn = !aliadoOn;
+  document.getElementById('aliadoTog').classList.toggle('on', aliadoOn);
+  document.getElementById('aliadoSel').classList.toggle('open', aliadoOn);
+  if (aliadoOn) renderAliadoCards();
+  else { aliadoSel = null; document.getElementById('comPrev').classList.remove('open'); }
+  updateTotals();
+}
+
+function renderAliadoCards() {
+  var h = '';
+  for (var i = 0; i < ALIADOS.length; i++) {
+    var a = ALIADOS[i];
+    var cls = aliadoSel && aliadoSel.id === a.id ? ' sel' : '';
+    h += '<div class="acard' + cls + '" onclick="selAliado(\'' + a.id + '\')">' +
+      '<span class="acom">' + a.pct + '%</span>' +
+      '<div class="aname">' + escHtml(a.nombre) + '</div>' +
+      '<div class="aneg">' + escHtml(a.negocio) + '</div>' +
+    '</div>';
+  }
+  document.getElementById('aliadoCards').innerHTML = h;
+}
+
+function selAliado(id) {
+  for (var i = 0; i < ALIADOS.length; i++) { if (ALIADOS[i].id === id) { aliadoSel = ALIADOS[i]; break; } }
+  renderAliadoCards(); updateComPrev();
+}
+
+function updateComPrev() {
+  var el = document.getElementById('comPrev');
+  if (!aliadoSel || !cart.length) { el.classList.remove('open'); return; }
+  var usd = totalCarritoUSD();
+  var bs = Math.round(usd * TASA);
+  var cBs  = Math.round(bs * aliadoSel.pct / 100);
+  var cUsd = (usd * aliadoSel.pct / 100).toFixed(2);
+  el.innerHTML = 'Comision para <strong>' + escHtml(aliadoSel.nombre) + '</strong>: <strong>' + fmtBS(cBs) + '</strong> / ' + fmtUSD(cUsd) + ' (' + aliadoSel.pct + '%)';
+  el.classList.add('open');
+}
+
+// ============================================================
+// GUARDAR VENTA
+// ============================================================
+function guardarVenta() {
+  var vendedor = document.getElementById('selV').value;
+  var canal    = document.getElementById('selC').value;
+  if (!vendedor) { toast('Selecciona el vendedor', 'err'); return; }
+  if (!canal)    { toast('Selecciona el canal', 'err'); return; }
+  if (!cart.length) { toast('Agrega al menos un producto', 'err'); return; }
+  if (!TASA || TASA < 1) { toast('No hay tasa de trabajo cargada. La fijan los socios en Gerencia.', 'err'); return; }
+
+  var now  = new Date();
+  var fecha = now.toLocaleDateString('es-VE');
+  var hora  = now.toLocaleTimeString('es-VE', {hour:'2-digit', minute:'2-digit'});
+  var baseUSD = baseCarritoUSD();
+  var ivaUSD  = FACTURAR ? Math.round(baseUSD * IVA_PCT) / 100 : 0;
+  var usd     = Math.round((baseUSD + ivaUSD) * 100) / 100;
+  var bs    = Math.round(usd * TASA);
+  var prods = cart.map(function(c) { return c.producto + ' x' + c.cantidad + ' (' + fmtUSD(c.precio) + ')'; }).join(' | ');
+  var notas = document.getElementById('txtNotas').value;
+
+  // Deep copy cart
+  lastCart = [];
+  for (var i = 0; i < cart.length; i++) {
+    lastCart.push({producto:cart[i].producto, codigo:cart[i].codigo, precio:parseFloat(cart[i].precio)||0, costo:parseFloat(cart[i].costo)||0, cantidad:parseInt(cart[i].cantidad)||1});
+  }
+
+  // ID unico de la venta: enlaza la fila de VENTAS con sus lineas en VENTAS_DETALLE
+  var idVenta = 'V' + now.getFullYear() + pad2(now.getMonth()+1) + pad2(now.getDate()) + '-' + pad2(now.getHours()) + pad2(now.getMinutes()) + pad2(now.getSeconds()) + '-' + Math.random().toString(36).substr(2,4).toUpperCase();
+  var lineas = lastCart.map(function(c) {
+    return {codigo:c.codigo, producto:c.producto, cantidad:c.cantidad, precio:c.precio, costo:c.costo};
+  });
+
+  var com = 0;
+  var pagoData = [];
+  for (var i = 0; i < pagos.length; i++) {
+    var p  = pagos[i];
+    var mEl = document.getElementById('monto_' + p.id);
+    var monEl = document.getElementById('mon_' + p.id);
+    var metEl = document.getElementById('met_' + p.id);
+    var monto  = mEl ? parseFloat(mEl.value) || 0 : 0;
+    var moneda = monEl ? monEl.value : 'BS';
+    var metIdx = metEl ? parseInt(metEl.value) : NaN;
+    var metNom = (!isNaN(metIdx) && METODOS[metIdx]) ? METODOS[metIdx].metodo : '';
+    var banNom = (!isNaN(metIdx) && METODOS[metIdx]) ? METODOS[metIdx].banco : '';
+    if (p.metodoData && monto > 0) com += p.metodoData.fijo + monto * p.metodoData.pct / 100;
+    pagoData.push({metodo:metNom, banco:banNom, monto:monto, moneda:moneda, label:(!isNaN(metIdx) && METODOS[metIdx]) ? METODOS[metIdx].label : ''});
+  }
+
+  // Validaciones: primero el cliente, que es obligatorio en toda venta
+  if (!modoSocio && !clienteVenta) { toast('Toda venta lleva cliente: buscalo o registralo arriba', 'err'); irACliente(); return; }
+  if (FACTURAR && !modoSocio && !(clienteVenta && clienteVenta.rif)) { toast('Para facturar hace falta la cedula o RIF del cliente', 'err'); irACliente(); return; }
+  if (FACTURAR && (!TASA_BCV || TASA_BCV < 1)) { toast('Sin tasa BCV no se puede facturar. La carga un socio en Gerencia.', 'err'); return; }
+
+  var creditoUSD = 0, hayCredito = false;
+  for (var i = 0; i < pagos.length; i++) {
+    var p = pagos[i];
+    if (!p.metodoData) { toast('Hay una forma de pago sin metodo seleccionado', 'err'); return; }
+    var mEl = document.getElementById('monto_' + p.id);
+    var monEl = document.getElementById('mon_' + p.id);
+    var monto = mEl ? parseFloat(mEl.value) || 0 : 0;
+    if (monto <= 0) { toast('Hay una forma de pago sin monto', 'err'); return; }
+    if (p.metodoData.credito) {
+      hayCredito = true;
+      creditoUSD += (monEl && monEl.value === 'BS') ? monto / TASA : monto;
+    }
+  }
+  if (!pagos.length) { toast('Agrega la forma de pago', 'err'); return; }
+  var cubierto = sumaPagosUSD();
+  if (Math.abs(cubierto - usd) > Math.max(0.05, usd * 0.01)) {
+    var det = [];
+    for (var k2 = 0; k2 < pagos.length; k2++) {
+      var mE = document.getElementById('monto_' + pagos[k2].id), moE = document.getElementById('mon_' + pagos[k2].id);
+      var mv = mE ? parseFloat(mE.value) || 0 : 0, mo = moE ? moE.value : 'BS';
+      det.push((pagos[k2].metodoData ? pagos[k2].metodoData.label : '?') + ' ' + (mo === 'USD' ? fmtUSD(mv) : fmtBS(mv) + ' = ' + fmtUSD(mv / TASA)));
+    }
+    toast('Venta ' + fmtUSD(usd) + ' / pagos ' + fmtUSD(cubierto) + ':\n' + det.join('\n') + '\n' + (cubierto < usd ? 'Faltan ' + fmtUSD(usd - cubierto) : 'Sobran ' + fmtUSD(cubierto - usd)), 'err'); return;
+  }
+  var socioSel = modoSocio ? document.getElementById('selSocio').value : '';
+  if (modoSocio && !socioSel) { toast('Indica que socio se lleva la mercancia', 'err'); return; }
+  if (hayCredito && modoSocio) cliSel = {nombre:socioSel + ' (socio)', rif:'', tel:'', dir:'', credito:true};
+  if (hayCredito && !modoSocio) {
+    if (!clienteVenta.credito) { toast(clienteVenta.nombre + ' no esta autorizado para credito', 'err'); return; }
+    var lim = parseNum(clienteVenta.limite);
+    if (lim > 0 && (saldoCliente + creditoUSD) > lim + 0.009) {
+      var pin = prompt('Con esta venta ' + clienteVenta.nombre + ' quedaria en ' + fmtUSD(saldoCliente + creditoUSD) +
+        ' y su limite es ' + fmtUSD(lim) + '.\nPIN de socios para autorizar:');
+      if (pin === null) return;
+      if (hashPin(String(pin).trim()) !== PIN_HASH_SOCIOS) { toast('PIN incorrecto: la venta no se registro', 'err'); return; }
+    }
+    cliSel = clienteVenta;
+  }
+  if (!modoSocio && !cliSel) cliSel = clienteVenta;
+  creditoUSD = Math.round(creditoUSD * 100) / 100;
+
+  // Cashea: el cliente paga la inicial en tienda y Cashea liquida el resto.
+  // Comision: 4% del total de la venta + 4% del monto financiado.
+  var cashea = {inicial:0, financiado:0, comision:0, neto:0};
+  for (var ci = 0; ci < pagos.length; ci++) {
+    var cp = pagos[ci];
+    if (!cp.metodoData || String(cp.metodoData.metodo).toUpperCase().indexOf('CASHEA') < 0) continue;
+    var cEl = document.getElementById('monto_' + cp.id), coEl = document.getElementById('mon_' + cp.id);
+    var cm = cEl ? parseFloat(cEl.value) || 0 : 0;
+    cashea.financiado += (coEl && coEl.value === 'BS') ? cm / TASA : cm;
+  }
+  if (cashea.financiado > 0) {
+    cashea.financiado = Math.round(cashea.financiado * 100) / 100;
+    cashea.inicial = Math.round((usd - cashea.financiado) * 100) / 100;
+    cashea.comision = Math.round((usd * 0.04 + cashea.financiado * 0.04) * 100) / 100;
+    cashea.neto = Math.round((cashea.financiado - cashea.comision) * 100) / 100;
+  }
+
+  var aComBs = aliadoSel ? Math.round(bs * aliadoSel.pct / 100) : 0;
+
+  var payload = {
+    fecha:fecha, hora:hora, vendedor:vendedor, canal:canal,
+    productos:prods, totalUSD:usd.toFixed(2), totalBS:bs,
+    pago1:pagoData[0]||{}, pago2:pagoData[1]||{}, pago3:pagoData[2]||{},
+    comision:Math.round(com), neto:Math.round(bs - com),
+    aliado:aliadoSel?aliadoSel.nombre:'', aliadoNegocio:aliadoSel?aliadoSel.negocio:'',
+    aliadoPct:aliadoSel?aliadoSel.pct:0, aliadoComision:aComBs,
+    notas:notas,
+    idVenta:idVenta, tasa:TASA, lineas:lineas,
+    facturar:FACTURAR, baseUSD:baseUSD, ivaUSD:ivaUSD, totalConIvaUSD:usd, tasaBCV:TASA_BCV,
+    casheaInicial:cashea.inicial, casheaFinanciado:cashea.financiado,
+    casheaComision:cashea.comision, casheaNeto:cashea.neto,
+    cliente: cliSel ? {nombre:cliSel.nombre, rif:cliSel.rif || '', tel:cliSel.tel || ''} : null,
+    creditoUSD: creditoUSD,
+    socio: socioSel
+  };
+
+  var btn = document.getElementById('btnVenta');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
+
+  postScript(payload)
+    .then(function(d) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Registrar Venta'; }
+      if (!d || d.ok !== true) throw new Error(d && d.error ? d.error : 'Respuesta inesperada: ' + JSON.stringify(d).slice(0, 120));
+      lastIdVenta = idVenta;
+      lastPagos = pagoData.slice();
+      FACT_CASHEA = cashea.financiado > 0 ? cashea : null;
+      if (d.numNota) { NOTA_NUM = parseInt(d.numNota); BoPartsDev.localStorage.setItem('boparts_nota_num', NOTA_NUM); lastNotaAsignada = NOTA_NUM; } else { lastNotaAsignada = 0; }
+      lastCredito = hayCredito ? {cliente:cliSel, usd:creditoUSD} : null;
+      document.getElementById('successMsg').textContent = vendedor + ' - ' + fmtUSD(usd) + ' / ' + fmtBS(bs) +
+        (hayCredito ? '\nA credito: ' + fmtUSD(creditoUSD) + ' - ' + cliSel.nombre : '');
+      document.getElementById('success').classList.add('open');
+    })
+    .catch(function(err) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Registrar Venta'; }
+      // La venta NO se guardo: el carrito queda intacto para reintentar
+      toast('No se guardo la venta (' + (err && err.message ? err.message : 'sin conexion') + '). Reintenta.', 'err');
+    });
+}
+
+// POST a Apps Script con respuesta legible.
+// Content-Type text/plain evita el preflight CORS que Apps Script no soporta.
+function postScript(payload) {
+  return BoPartsDev.fetch(SCRIPT_URL, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body:JSON.stringify(payload)})
+    .then(function(r) { return r.text(); })
+    .then(function(txt) {
+      try { return JSON.parse(txt); }
+      catch (e) { throw new Error('El script respondio: ' + txt.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120)); }
+    });
+}
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+// Convierte '$ 6.04', '$1,234.56', '6,04' o 6.04 en número. Devuelve 0 si no puede.
+function parseNum(v) {
+  if (typeof v === 'number') return v;
+  var t = String(v || '').replace(/[^0-9.,-]/g, '');
+  if (!t) return 0;
+  if (t.indexOf(',') >= 0 && t.indexOf('.') >= 0) {
+    if (t.lastIndexOf(',') > t.lastIndexOf('.')) t = t.replace(/\./g, '').replace(',', '.'); else t = t.replace(/,/g, '');
+  } else if (t.indexOf(',') >= 0) t = t.replace(',', '.');                        // 6,04
+  var n = parseFloat(t);
+  return isNaN(n) ? 0 : n;
+}
+var lastIdVenta = '';
+var lastCredito = null;
+var lastNotaAsignada = 0;
+var lastPagos = [];         // formas de pago de la ultima venta (para el mensaje de WhatsApp)
+   // numero de nota que el script asigno a la ultima venta
+var cotNumPromise = null;   // numero de cotizacion pedido al abrir la pantalla
+
+function nuevaVenta() {
+  document.getElementById('success').classList.remove('open');
+  resetAll();
+}
+
+function resetAll() {
+  cart = []; pagos = []; pid = 0;
+  aliadoOn = false; aliadoSel = null; cliSel = null; lastCredito = null;
+  clienteVenta = null; saldoCliente = 0; pintarClienteVenta();
+  FACTURAR = false;
+  var ft = document.getElementById('factTog'); if (ft) ft.classList.remove('on');
+  var fs = document.getElementById('factSub'); if (fs) fs.textContent = 'Apagado: nota de entrega, sin IVA';
+  var cf = document.getElementById('cliVtaForm'); if (cf) cf.style.display = 'none';
+  modoSocio = false;
+  var tg = document.getElementById('socioTog'); if (tg) tg.classList.remove('on');
+  var sb = document.getElementById('socioSel'); if (sb) sb.classList.remove('open');
+  var su = document.getElementById('socioSub'); if (su) su.textContent = 'Requiere PIN de socios';
+  var sl = document.getElementById('selSocio'); if (sl) sl.value = '';
+  document.getElementById('selV').value = '';
+  document.getElementById('selC').value = '';
+  document.getElementById('txtNotas').value = '';
+  document.getElementById('aliadoTog').classList.remove('on');
+  document.getElementById('aliadoSel').classList.remove('open');
+  document.getElementById('comPrev').classList.remove('open');
+  renderCart(); addPago(); updateTotals();
+}
+
+// ============================================================
+// CLIENTES
+// ============================================================
+var cliSearch = document.getElementById('cliSearch');
+var cliDrop   = document.getElementById('cliDrop');
+
+cliSearch.addEventListener('input', function() {
+  var q = norm(cliSearch.value).trim();
+  if (q.length < 2) { cliDrop.classList.remove('open'); return; }
+  var res = [];
+  for (var i = 0; i < CLIENTES.length && res.length < 8; i++) {
+    var c = CLIENTES[i];
+    var hay = norm(c.nombre + ' ' + c.rif + ' ' + c.tel);
+    if (hay.indexOf(q) >= 0) res.push(c);
+  }
+  cliRes = res;
+  if (!res.length) {
+    cliDrop.innerHTML = (CLIENTES.length ? '<div class="ditem" style="color:var(--ink-muted)">Sin coincidencias entre ' + CLIENTES.length + ' clientes</div>' : '<div class="ditem" style="color:var(--red)">La lista de clientes no ha cargado. Revisa la conexion.</div>') +
+      '<div class="ditem" onclick="mostrarFormCliente()" style="color:var(--brand);font-weight:600">+ Nuevo cliente</div>';
+    cliDrop.classList.add('open'); return;
+  }
+  var h = '';
+  for (var i = 0; i < res.length; i++) {
+    var c = res[i];
+    h += '<div class="ditem" onclick="selCliente(' + i + ')">' +
+      escHtml(c.nombre) +
+      '<div class="ditem-meta">' + (c.rif || '') + (c.tel ? ' · ' + c.tel : '') + '</div>' +
+    '</div>';
+  }
+  // Also offer "new client" at bottom
+  h += '<div class="ditem" onclick="mostrarFormCliente()" style="color:var(--brand);font-weight:600">+ Nuevo cliente</div>';
+  cliDrop.innerHTML = h;
+  cliDrop.classList.add('open');
+});
+
+var cliRes = [];
+function selCliente(idx) {
+  var c = cliRes[idx];
+  if (!c) return;
+  cliSel = c;
+  cliDrop.classList.remove('open');
+  cliSearch.value = '';
+  mostrarCliSelected(c);
+  mostrarBotonesNota();
+}
+
+var cliMostrado = null;   // el cliente que se ve en la tarjeta de la nota (respaldo de cliSel)
+function mostrarCliSelected(c) {
+  cliMostrado = c;
+  var el = document.getElementById('cliSelected');
+  el.innerHTML = '<div class="cli-result">' +
+    '<div><div class="cli-info">' + escHtml(c.nombre) + '</div>' +
+    '<div class="cli-sub">' + (c.rif||'') + (c.tel ? ' · ' + c.tel : '') + (c.dir ? ' · ' + c.dir : '') + '</div></div>' +
+    '<button class="cli-clear" onclick="limpiarCliente()">&#x2715;</button>' +
+  '</div>';
+  el.style.display = 'block';
+  document.getElementById('cliSearchWrap').style.display = 'none';
+  document.getElementById('cliNewBtn').style.display = 'none';
+  document.getElementById('skipNota').style.display = 'none';
+}
+
+function limpiarCliente() {
+  cliSel = null; cliMostrado = null;
+  document.getElementById('cliSelected').style.display = 'none';
+  document.getElementById('cliSearchWrap').style.display = 'block';
+  document.getElementById('cliNewBtn').style.display = 'block';
+  document.getElementById('skipNota').style.display = 'block';
+  document.getElementById('notaBtns').style.display = 'none';
+}
+
+function mostrarFormCliente() {
+  document.getElementById('formCliente').style.display = 'block';
+  document.getElementById('cliDrop').classList.remove('open');
+  document.getElementById('cliNewBtn').style.display = 'none';
+  document.getElementById('skipNota').style.display = 'none';
+}
+
+function ocultarFormCliente() {
+  document.getElementById('formCliente').style.display = 'none';
+  document.getElementById('cliNewBtn').style.display = 'block';
+  document.getElementById('skipNota').style.display = 'block';
+}
+
+function guardarCliente() {
+  var nombre = document.getElementById('cliNombre').value.trim();
+  if (!nombre) { toast('Ingresa el nombre del cliente', 'err'); return; }
+  var c = {
+    nombre: nombre,
+    rif:    document.getElementById('cliRif').value.trim(),
+    tel:    document.getElementById('cliTel').value.trim(),
+    dir:    document.getElementById('cliDir').value.trim(),
+    nota:   document.getElementById('cliNota').value.trim()
+  };
+  CLIENTES.push(c);
+  cliSel = c;
+  // Save to sheet
+  var payload = {tipo:'cliente', nombre:c.nombre, rif:c.rif, tel:c.tel, dir:c.dir, nota:c.nota, fecha:new Date().toLocaleDateString('es-VE')};
+  document.getElementById('formCliente').style.display = 'none';
+  mostrarCliSelected(c);
+  mostrarBotonesNota();
+  postScript(payload)
+    .then(function(d) { toast(d && d.ok ? 'Cliente guardado' : 'Cliente NO guardado en la hoja', d && d.ok ? 'ok' : 'err'); })
+    .catch(function() { toast('Cliente NO guardado en la hoja (sin conexion)', 'err'); });
+}
+
+function mostrarBotonesNota() {
+  document.getElementById('notaBtns').style.display = 'block';
+  document.getElementById('skipNota').style.display = 'none';
+}
+
+// ============================================================
+// NOTA DE ENTREGA
+// ============================================================
+var modoDoc = 'nota';   // 'nota' | 'cot'
+var lastPDF = null;     // {blob, nombre, num}
+
+function abrirNota() { abrirDoc('nota'); }
+
+function abrirCotizacion() {
+  if (!cart.length) { toast('Agrega al menos un producto', 'err'); return; }
+  if (!TASA || TASA < 1) { toast('No hay tasa BCV cargada. Abre Lista de Precios y fijala primero.', 'err'); return; }
+  lastCart = cart.map(function(c) { return {producto:c.producto, codigo:c.codigo, precio:parseFloat(c.precio)||0, costo:parseFloat(c.costo)||0, cantidad:parseInt(c.cantidad)||1}; });
+  // Pedir el numero mientras el vendedor elige cliente (si cancela, ese numero se pierde; en cotizaciones no importa)
+  cotNumPromise = BoPartsDev.fetch(SCRIPT_URL + '?action=nextCot')
+    .then(leerJSON)
+    .then(function(d) { return d && d.num ? d.num : null; })
+    .catch(function() { return null; });
+  abrirDoc('cot');
+}
+
+function abrirDoc(modo) {
+  modoDoc = modo; lastPDF = null;
+  var esCot = modo === 'cot';
+  document.getElementById('docTitle').textContent = esCot ? 'Cotizacion' : 'Nota de Entrega';
+  document.getElementById('docSub').textContent = esCot ? 'La cotizacion NO registra venta ni descuenta stock' : 'Busca un cliente existente o agrega uno nuevo';
+  document.getElementById('btnDoc').textContent = esCot ? 'Generar Cotizacion (PDF)' : 'Generar Nota de Entrega (PDF)';
+  document.getElementById('btnCerrarDoc').textContent = esCot ? 'Cerrar' : 'Omitir - Nueva Venta';
+  document.getElementById('skipNota').textContent = esCot ? 'Cerrar' : 'Omitir - Nueva Venta';
+  document.getElementById('cotSinCliente').style.display = esCot ? 'block' : 'none';
+  document.getElementById('cotMonedaWrap').style.display = esCot ? 'block' : 'none';
+  document.getElementById('btnFactura').style.display = (esCot || !FACTURAR) ? 'none' : 'block';
+  if (esCot) document.getElementById('selCotMon').value = BoPartsDev.localStorage.getItem('boparts_cot_mon') || 'BS';
+  document.getElementById('docListo').style.display = 'none';
+  document.getElementById('btnDoc').style.display = 'block';
+  var pre = (!esCot && lastCredito) ? lastCredito.cliente : (!esCot && clienteVenta ? clienteVenta : null);
+  cliSel = null;
+  document.getElementById('cliSearch').value = '';
+  document.getElementById('cliSelected').style.display = 'none';
+  document.getElementById('cliSearchWrap').style.display = 'block';
+  document.getElementById('cliNewBtn').style.display = 'block';
+  document.getElementById('formCliente').style.display = 'none';
+  document.getElementById('notaBtns').style.display = 'none';
+  document.getElementById('skipNota').style.display = 'block';
+  document.getElementById('cliNombre').value = '';
+  document.getElementById('cliRif').value = '';
+  document.getElementById('cliTel').value = '';
+  document.getElementById('cliDir').value = '';
+  document.getElementById('cliNota').value = '';
+  document.getElementById('notaOv').classList.add('open');
+  if (pre) { cliSel = pre; mostrarCliSelected(pre); mostrarBotonesNota(); }
+}
+
+function cotizarSinCliente() {
+  cliSel = {nombre:'CLIENTE OCASIONAL', rif:'', tel:'', dir:''};
+  mostrarCliSelected(cliSel); mostrarBotonesNota();
+  document.getElementById('cotSinCliente').style.display = 'none';
+}
+
+function cerrarNota() {
+  document.getElementById('notaOv').classList.remove('open');
+  if (modoDoc === 'cot') { cliSel = null; return; }   // la cotizacion no toca el carrito
+  document.getElementById('success').classList.remove('open');
+  resetAll();
+}
+
+function generarDoc() {
+  if (!cliSel) {
+    // Respaldo: el cliente que se ve en la tarjeta, o el del credito de esta venta
+    var tarjetaVisible = document.getElementById('cliSelected').style.display !== 'none';
+    if (tarjetaVisible && cliMostrado) cliSel = cliMostrado;
+    else if (modoDoc === 'nota' && lastCredito && lastCredito.cliente) { cliSel = lastCredito.cliente; mostrarCliSelected(cliSel); }
+  }
+  if (!cliSel) { toast('Selecciona o registra un cliente primero', 'err'); return; }
+  var btn = document.getElementById('btnDoc');
+  btn.disabled = true; btn.textContent = 'Generando...';
+  var esCot = modoDoc === 'cot';
+  var pNum;
+  if (esCot) {
+    pNum = cotNumPromise || Promise.resolve(null);
+  } else if (lastNotaAsignada) {
+    pNum = Promise.resolve(lastNotaAsignada);            // ya vino con la venta: sin espera
+  } else {
+    pNum = BoPartsDev.fetch(SCRIPT_URL + '?action=nextNota&idVenta=' + encodeURIComponent(lastIdVenta))   // script viejo
+      .then(leerJSON).then(function(d) { return d && d.num ? d.num : null; }).catch(function() { return null; });
+  }
+  pNum
+    .then(function(num) {
+      if (esCot) {
+        if (!num) { num = parseInt(BoPartsDev.localStorage.getItem('boparts_cot_num') || '0') + 1; }
+        BoPartsDev.localStorage.setItem('boparts_cot_num', num);
+        COT_NUM = num;
+      } else {
+        NOTA_NUM = num ? parseInt(num) : NOTA_NUM + 1;
+        BoPartsDev.localStorage.setItem('boparts_nota_num', NOTA_NUM);
+      }
+      return construirPDF(esCot ? 'cot' : 'nota', esCot ? COT_NUM : NOTA_NUM);
+    })
+    .then(function(pdf) {
+      lastPDF = pdf;
+      btn.disabled = false; btn.textContent = esCot ? 'Generar Cotizacion (PDF)' : 'Generar Nota de Entrega (PDF)';
+      btn.style.display = 'none';
+      document.getElementById('docListo').style.display = 'block';
+      if (esCot) registrarCotizacion(pdf.num);
+      toast(pdf.num + ' lista', 'ok');
+      compartirPDF();
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = esCot ? 'Generar Cotizacion (PDF)' : 'Generar Nota de Entrega (PDF)';
+      toast('No se pudo generar el PDF: ' + (e && e.message ? e.message : e), 'err');
+    });
+}
+var COT_NUM = 0;
+
+// Convierte icon-192.png a dataURL para el PDF (falla en silencio si no esta)
+var LOGO_DATA = null;
+(function cargarLogo() {
+  try {
+    var img = new Image();
+    img.onload = function() {
+      var cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height;
+      cv.getContext('2d').drawImage(img, 0, 0);
+      try { LOGO_DATA = cv.toDataURL('image/png'); } catch (e) {}
+    };
+    img.src = 'icon-192.png';
+  } catch (e) {}
+})();
+
+var EMPRESA = {
+  nombre:'BOSC SUPPLY, C.A.', rif:'RIF: J-50828177-2',
+  dir:'Calle Principal, Edif Torre C, Piso 2, Apt 24, Conj. Res. 408, Los Rastrojos, Lara',
+  contacto:'0424-5575850 | boscsupply@gmail.com',
+  tienda:'Repuesto BoParts · 0412-3185778 / 0414-9536708'
+};
+
+function construirPDF(tipo, numero) {
+  return new Promise(function(resolve, reject) {
+    try {
+      var JS = window.jspdf && window.jspdf.jsPDF;
+      if (!JS) throw new Error('Libreria PDF no cargo (sin internet?)');
+      var esCot = tipo === 'cot';
+      var enUSD = esCot && document.getElementById('selCotMon').value === 'USD';
+      var fmtM = enUSD ? fmtUSD : function(n) { return fmtBS(n); };
+      var sufijo = enUSD ? '$' : 'Bs';
+      var num = (esCot ? 'COT-' : 'NE-') + ('000' + numero).slice(-4);
+      var doc = new JS({unit:'mm', format:'a4'});
+      var W = 210, M = 14, y = 12;
+      var hoy = new Date();
+      var fecha = hoy.toLocaleDateString('es-VE', {day:'2-digit', month:'2-digit', year:'numeric'});
+      var amarillo = [245,168,0], negro = [17,17,17], gris = [120,120,120];
+
+      // Cabecera
+      doc.setFillColor(negro[0],negro[1],negro[2]); doc.roundedRect(M, y, W - 2*M, 30, 2, 2, 'F');
+      var tx = M + 6;
+      if (LOGO_DATA) { try { doc.addImage(LOGO_DATA, 'PNG', M + 4, y + 4, 22, 22); tx = M + 30; } catch (e) {} }
+      doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(EMPRESA.nombre, tx, y + 10);
+      doc.setTextColor(amarillo[0],amarillo[1],amarillo[2]); doc.setFontSize(9); doc.text(EMPRESA.rif, tx, y + 15);
+      doc.setTextColor(200,200,200); doc.setFont('helvetica','normal'); doc.setFontSize(7);
+      doc.text(EMPRESA.dir, tx, y + 20); doc.text(EMPRESA.contacto, tx, y + 24);
+      // Badge
+      doc.setFillColor(amarillo[0],amarillo[1],amarillo[2]); doc.roundedRect(W - M - 52, y + 6, 46, 18, 2, 2, 'F');
+      doc.setTextColor(negro[0],negro[1],negro[2]); doc.setFont('helvetica','bold'); doc.setFontSize(10);
+      doc.text(esCot ? 'COTIZACION' : 'NOTA DE ENTREGA', W - M - 29, y + 13, {align:'center'});
+      doc.setFontSize(11); doc.text('N ' + num, W - M - 29, y + 20, {align:'center'});
+      y += 33;
+
+      // Info
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text('FECHA', M, y); doc.text('CONDICION', M + 45, y);
+      if (esCot) { doc.text('MONEDA', M + 95, y); doc.text('VALIDEZ', M + 140, y); }
+      doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]); doc.setFontSize(9);
+      var cond = esCot ? 'SEGUN FORMA DE PAGO' : (lastCredito ? 'CREDITO' : 'CONTADO');
+      doc.text(fecha, M, y + 5); doc.text(cond, M + 45, y + 5);
+      if (esCot) { doc.text(enUSD ? 'DOLARES (USD)' : 'BOLIVARES (Bs)', M + 95, y + 5); doc.text('24 HORAS', M + 140, y + 5); }
+      y += 9; doc.setDrawColor(230,230,230); doc.line(M, y, W - M, y); y += 4;
+
+      // Cliente
+      doc.setFillColor(amarillo[0],amarillo[1],amarillo[2]); doc.rect(M, y, W - 2*M, 6, 'F');
+      doc.setFontSize(8); doc.setTextColor(negro[0],negro[1],negro[2]); doc.text('INFORMACION DEL CLIENTE', M + 3, y + 4.2);
+      y += 6;
+      doc.setFillColor(249,249,249); doc.rect(M, y, W - 2*M, 18, 'F');
+      doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text('NOMBRE / RAZON SOCIAL', M + 3, y + 4);
+      doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]);
+      doc.text(String(cliSel.nombre || '').toUpperCase().slice(0, 60), M + 3, y + 9);
+      doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(gris[0],gris[1],gris[2]);
+      var info = 'RIF: ' + (cliSel.rif || '-') + (cliSel.tel ? '   TEL: ' + cliSel.tel : '') + (cliSel.dir ? '   DIR: ' + cliSel.dir : '');
+      doc.text(info.slice(0, 120), M + 3, y + 14);
+      y += 22;
+
+      // Tabla
+      var body = [], totalBs = 0, totalUsd = 0;
+      for (var i = 0; i < lastCart.length; i++) {
+        var c = lastCart[i];
+        var subUsd = c.precio * c.cantidad, subBs = Math.round(subUsd * TASA);
+        totalBs += subBs; totalUsd += subUsd;
+        body.push([c.producto, String(c.cantidad), enUSD ? fmtUSD(c.precio) : fmtBS(Math.round(c.precio * TASA)), enUSD ? fmtUSD(subUsd) : fmtBS(subBs)]);
+      }
+      doc.autoTable({
+        startY: y, margin:{left:M, right:M},
+        head:[['DESCRIPCION','CANT.','PRECIO ' + sufijo,'TOTAL ' + sufijo]], body:body,
+        styles:{fontSize:8, cellPadding:2, textColor:[17,17,17]},
+        headStyles:{fillColor:negro, textColor:[255,255,255], fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[246,246,246]},
+        columnStyles:{1:{halign:'center', cellWidth:16}, 2:{cellWidth:32, halign:'right'}, 3:{cellWidth:34, halign:'right', fontStyle:'bold'}}
+      });
+      y = doc.lastAutoTable.finalY + 5;
+
+      // Total
+      doc.setFillColor(amarillo[0],amarillo[1],amarillo[2]); doc.roundedRect(W - M - 62, y, 62, 16, 1.5, 1.5, 'F');
+      doc.setTextColor(negro[0],negro[1],negro[2]); doc.setFontSize(7); doc.setFont('helvetica','bold'); doc.text('TOTAL', W - M - 58, y + 5);
+      doc.setFontSize(14); doc.text(enUSD ? fmtUSD(totalUsd) : fmtBS(totalBs), W - M - 4, y + 11, {align:'right'});
+      doc.setFontSize(7); doc.setFont('helvetica','normal');
+      if (!esCot) doc.text('Ref. ' + fmtUSD(totalUsd), W - M - 58, y + 13);
+      y += 22;
+
+      if (esCot) {
+        doc.setFontSize(7.5); doc.setTextColor(gris[0],gris[1],gris[2]);
+        doc.text('Precios sujetos a cambio sin previo aviso. Cotizacion valida por 24 horas o hasta agotar existencia.', M, y);
+        y += 5;
+      } else {
+        // Firmas
+        y += 10; doc.setDrawColor(150,150,150); doc.setLineDashPattern([1,1], 0);
+        doc.line(M, y, M + 75, y); doc.line(W - M - 75, y, W - M, y); doc.setLineDashPattern([], 0);
+        doc.setFontSize(7); doc.setTextColor(gris[0],gris[1],gris[2]);
+        doc.text('Firma y sello del receptor', M, y + 4); doc.text('Firma del representante BOSC SUPPLY', W - M, y + 4, {align:'right'});
+        y += 10;
+      }
+
+      // Pie
+      var fy = 285;
+      doc.setFillColor(negro[0],negro[1],negro[2]); doc.rect(M, fy - 6, W - 2*M, 8, 'F');
+      doc.setTextColor(200,200,200); doc.setFontSize(7); doc.text(EMPRESA.nombre + ' | ' + EMPRESA.rif + ' | ' + EMPRESA.tienda, W/2, fy - 1, {align:'center'});
+      doc.setTextColor(150,150,150); doc.setFontSize(6.5);
+      doc.text(esCot ? 'Este documento es una cotizacion y no constituye compromiso de venta.' : 'Este documento no tiene valor fiscal. Solo sirve como comprobante de entrega.', W/2, fy + 6, {align:'center'});
+
+      var nombreArchivo = num + '_' + String(cliSel.nombre || 'cliente').replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 30) + '.pdf';
+      resolve({blob: doc.output('blob'), nombre: nombreArchivo, num: num, totalBs: totalBs, totalUsd: totalUsd, moneda: enUSD ? 'USD' : 'BS'});
+    } catch (e) { reject(e); }
+  });
+}
+
+// ============================================================
+// FACTURA FISCAL (v13): numeracion y numero de control salen de CONFIG (rango de la imprenta autorizada).
+// Se expresa en bolivares a la tasa BCV del dia, con el IVA discriminado.
+// ============================================================
+var FACT = null;
+function generarFactura() {
+  if (!cliSel) {
+    var visible = document.getElementById('cliSelected').style.display !== 'none';
+    if (visible && cliMostrado) cliSel = cliMostrado;
+    else if (clienteVenta) cliSel = clienteVenta;
+  }
+  if (!cliSel) { toast('La factura necesita los datos del cliente', 'err'); return; }
+  if (!cliSel.rif) { toast('Falta la cedula o RIF del cliente: la factura lo exige', 'err'); return; }
+  if (!TASA_BCV || TASA_BCV < 1) { toast('No hay tasa BCV cargada. La carga un socio en Gerencia.', 'err'); return; }
+  var btn = document.getElementById('btnFactura');
+  btn.disabled = true; btn.textContent = 'Generando...';
+  BoPartsDev.fetch(SCRIPT_URL + '?action=nextFactura&t=' + Date.now())
+    .then(leerJSON)
+    .then(function(d) {
+      if (!d || !d.ok) throw new Error(d && d.error ? d.error : 'no se pudo numerar');
+      FACT = d;
+      return construirFactura(d);
+    })
+    .then(function(pdf) {
+      lastPDF = pdf;
+      btn.disabled = false; btn.textContent = 'Generar FACTURA fiscal';
+      document.getElementById('docListo').style.display = 'block';
+      toast('Factura ' + pdf.num + ' · control ' + FACT.control + (FACT.restantes ? ' · quedan ' + FACT.restantes : ''), 'ok');
+      compartirPDF();
+    })
+    .catch(function(e) {
+      btn.disabled = false; btn.textContent = 'Generar FACTURA fiscal';
+      toast('No se genero la factura: ' + (e && e.message ? e.message : e), 'err');
+    });
+}
+
+function construirFactura(num) {
+  return new Promise(function(resolve, reject) {
+    try {
+      var JS = window.jspdf && window.jspdf.jsPDF;
+      if (!JS) throw new Error('Libreria PDF no cargo (sin internet?)');
+      var doc = new JS({unit:'mm', format:'a4'});
+      var W = 210, M = 14, y = 12;
+      var hoy = new Date();
+      var fecha = hoy.toLocaleDateString('es-VE', {day:'2-digit', month:'2-digit', year:'numeric'});
+      var amarillo = [245,168,0], negro = [17,17,17], gris = [120,120,120];
+      var nf = 'F-' + ('00000' + num.factura).slice(-6);
+
+      // Emisor
+      doc.setFillColor(negro[0],negro[1],negro[2]); doc.roundedRect(M, y, W - 2*M, 30, 2, 2, 'F');
+      var tx = M + 6;
+      if (LOGO_DATA) { try { doc.addImage(LOGO_DATA, 'PNG', M + 4, y + 4, 22, 22); tx = M + 30; } catch (e) {} }
+      doc.setTextColor(255,255,255); doc.setFont('helvetica','bold'); doc.setFontSize(15); doc.text(EMPRESA.nombre, tx, y + 10);
+      doc.setTextColor(amarillo[0],amarillo[1],amarillo[2]); doc.setFontSize(9); doc.text(EMPRESA.rif, tx, y + 15);
+      doc.setTextColor(200,200,200); doc.setFont('helvetica','normal'); doc.setFontSize(7);
+      doc.text('Domicilio fiscal: ' + EMPRESA.dir, tx, y + 20); doc.text(EMPRESA.contacto, tx, y + 24);
+      doc.setFillColor(amarillo[0],amarillo[1],amarillo[2]); doc.roundedRect(W - M - 58, y + 5, 52, 20, 2, 2, 'F');
+      doc.setTextColor(negro[0],negro[1],negro[2]); doc.setFont('helvetica','bold'); doc.setFontSize(12);
+      doc.text('PRUEBA - SIN VALOR FISCAL', W - M - 32, y + 11, {align:'center'});
+      doc.setFontSize(9); doc.text('N ' + nf, W - M - 32, y + 16.5, {align:'center'});
+      doc.setFontSize(8); doc.text('Control N ' + num.control, W - M - 32, y + 21.5, {align:'center'});
+      y += 33;
+
+      // Datos de la operacion
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text('FECHA DE EMISION', M, y); doc.text('CONDICION', M + 55, y); doc.text('TASA BCV', M + 105, y); doc.text('MONEDA', M + 150, y);
+      doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]); doc.setFontSize(9);
+      doc.text(fecha, M, y + 5);
+      doc.text(lastCredito ? 'CREDITO' : (FACT_CASHEA ? 'CASHEA' : 'CONTADO'), M + 55, y + 5);
+      doc.text('Bs ' + TASA_BCV, M + 105, y + 5);
+      doc.text('BOLIVARES', M + 150, y + 5);
+      y += 9; doc.setDrawColor(230,230,230); doc.line(M, y, W - M, y); y += 4;
+
+      // Receptor
+      doc.setFillColor(amarillo[0],amarillo[1],amarillo[2]); doc.rect(M, y, W - 2*M, 6, 'F');
+      doc.setFontSize(8); doc.setTextColor(negro[0],negro[1],negro[2]); doc.text('DATOS DEL ADQUIRENTE', M + 3, y + 4.2);
+      y += 6;
+      doc.setFillColor(249,249,249); doc.rect(M, y, W - 2*M, 18, 'F');
+      doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text('NOMBRE O RAZON SOCIAL', M + 3, y + 4);
+      doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]);
+      doc.text(String(cliSel.nombre || '').toUpperCase().slice(0, 60), M + 3, y + 9);
+      doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text(('CEDULA / RIF: ' + (cliSel.rif || '-') + (cliSel.tel ? '   TELEFONO: ' + cliSel.tel : '') + (cliSel.dir ? '   DIRECCION: ' + cliSel.dir : '')).slice(0, 120), M + 3, y + 14);
+      y += 22;
+
+      // Renglones: precios sin IVA, en bolivares a tasa BCV
+      var body = [], base = 0;
+      for (var i = 0; i < lastCart.length; i++) {
+        var c = lastCart[i];
+        var sub = c.precio * c.cantidad; base += sub;
+        body.push([c.codigo || '', c.producto, String(c.cantidad),
+                   fmtBS(Math.round(c.precio * TASA_BCV * 100) / 100), '16%', fmtBS(Math.round(sub * TASA_BCV))]);
+      }
+      base = Math.round(base * 100) / 100;
+      var iva = Math.round(base * IVA_PCT) / 100;
+      var tot = Math.round((base + iva) * 100) / 100;
+      doc.autoTable({
+        startY: y, margin:{left:M, right:M},
+        head:[['CODIGO','DESCRIPCION','CANT.','PRECIO Bs','ALIC.','TOTAL Bs']], body:body,
+        styles:{fontSize:8, cellPadding:2, textColor:[17,17,17]},
+        headStyles:{fillColor:negro, textColor:[255,255,255], fontStyle:'bold'},
+        alternateRowStyles:{fillColor:[246,246,246]},
+        columnStyles:{0:{cellWidth:24}, 2:{halign:'center', cellWidth:14}, 3:{cellWidth:28, halign:'right'},
+                      4:{halign:'center', cellWidth:14}, 5:{cellWidth:30, halign:'right', fontStyle:'bold'}}
+      });
+      y = doc.lastAutoTable.finalY + 5;
+
+      // Totales discriminados
+      var bx = W - M - 78;
+      function fila(lbl, val, bold) {
+        doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(bold ? 11 : 9);
+        doc.setTextColor(negro[0],negro[1],negro[2]);
+        doc.text(lbl, bx, y); doc.text(val, W - M - 2, y, {align:'right'});
+        y += bold ? 7 : 5.5;
+      }
+      fila('Base imponible', fmtBS(Math.round(base * TASA_BCV)));
+      fila('IVA 16%', fmtBS(Math.round(iva * TASA_BCV)));
+      doc.setDrawColor(200,200,200); doc.line(bx, y - 3, W - M, y - 3); y += 1;
+      fila('TOTAL A PAGAR', fmtBS(Math.round(tot * TASA_BCV)), true);
+      doc.setFontSize(7); doc.setTextColor(gris[0],gris[1],gris[2]);
+      doc.text('Referencia: ' + fmtUSD(tot) + ' a tasa Bs ' + TASA_BCV, W - M - 2, y, {align:'right'});
+      y += 8;
+
+      // Forma de pago (con desglose Cashea si aplica)
+      doc.setFontSize(8); doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]);
+      doc.text('FORMA DE PAGO', M, y); y += 5;
+      doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(gris[0],gris[1],gris[2]);
+      for (var k = 0; k < lastPagos.length; k++) {
+        var pg = lastPagos[k];
+        if (!pg.monto) continue;
+        doc.text('- ' + (pg.label || pg.metodo) + ': ' + (pg.moneda === 'USD' ? fmtUSD(pg.monto) : fmtBS(pg.monto)), M + 2, y);
+        y += 4.5;
+      }
+      if (FACT_CASHEA && FACT_CASHEA.financiado > 0) {
+        y += 1;
+        doc.setFont('helvetica','bold'); doc.setTextColor(negro[0],negro[1],negro[2]);
+        doc.text('DESGLOSE CASHEA', M, y); y += 5;
+        doc.setFont('helvetica','normal'); doc.setTextColor(gris[0],gris[1],gris[2]);
+        doc.text('- Inicial pagada en tienda: ' + fmtBS(Math.round(FACT_CASHEA.inicial * TASA_BCV)) + '  (' + fmtUSD(FACT_CASHEA.inicial) + ')', M + 2, y); y += 4.5;
+        doc.text('- Financiado por Cashea: ' + fmtBS(Math.round(FACT_CASHEA.financiado * TASA_BCV)) + '  (' + fmtUSD(FACT_CASHEA.financiado) + ')', M + 2, y); y += 4.5;
+        doc.text('- Las cuotas las administra Cashea en su aplicacion. El comercio no cobra cuotas.', M + 2, y); y += 4.5;
+      }
+
+      // Pie
+      var fy = 285;
+      doc.setFillColor(negro[0],negro[1],negro[2]); doc.rect(M, fy - 6, W - 2*M, 8, 'F');
+      doc.setTextColor(200,200,200); doc.setFontSize(7);
+      doc.text(EMPRESA.nombre + ' | ' + EMPRESA.rif + ' | ' + EMPRESA.tienda, W/2, fy - 1, {align:'center'});
+      doc.setTextColor(150,150,150); doc.setFontSize(6.5);
+      doc.text('Factura emitida conforme a la Providencia SNAT/2011/0071. Conserve este documento.', W/2, fy + 6, {align:'center'});
+
+      var nombreArchivo = nf + '_' + String(cliSel.nombre || 'cliente').replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 30) + '.pdf';
+      resolve({blob: doc.output('blob'), nombre: nombreArchivo, num: nf, control: num.control, totalBs: Math.round(tot * TASA_BCV), totalUsd: tot});
+    } catch (e) { reject(e); }
+  });
+}
+var FACT_CASHEA = null;
+
+function compartirPDF() {
+  if (!lastPDF) { toast('Primero genera el PDF', 'err'); return; }
+  var file = null;
+  try { file = new File([lastPDF.blob], lastPDF.nombre, {type:'application/pdf'}); } catch (e) {}
+  if (file && navigator.share && navigator.canShare && navigator.canShare({files:[file]})) {
+    navigator.share({files:[file], title:lastPDF.num, text:(modoDoc === 'cot' ? 'Cotizacion ' : 'Nota de Entrega ') + lastPDF.num + ' - Repuesto BoParts'})
+      .catch(function(e) { if (e && e.name !== 'AbortError') verPDF(); });
+  } else {
+    verPDF();   // escritorio o navegador sin compartir: descarga
+  }
+}
+
+function verPDF() {
+  if (!lastPDF) return;
+  var url = URL.createObjectURL(lastPDF.blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = lastPDF.nombre; a.target = '_blank';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 60000);
+}
+
+function registrarCotizacion(num) {
+  var now = new Date();
+  var usd = 0; for (var i = 0; i < lastCart.length; i++) usd += lastCart[i].precio * lastCart[i].cantidad;
+  var payload = {
+    tipo:'cotizacion', num:num,
+    fecha:now.toLocaleDateString('es-VE'), hora:now.toLocaleTimeString('es-VE', {hour:'2-digit', minute:'2-digit'}),
+    vendedor:document.getElementById('selV').value || '', cliente:cliSel ? cliSel.nombre : '', rif:cliSel ? (cliSel.rif || '') : '', tel:cliSel ? (cliSel.tel || '') : '',
+    productos:lastCart.map(function(c) { return c.producto + ' x' + c.cantidad + ' (' + fmtUSD(c.precio) + ')'; }).join(' | '),
+    totalUSD:Math.round(usd * 100) / 100, totalBS:Math.round(usd * TASA), tasa:TASA, moneda:document.getElementById('selCotMon').value,
+    lineas:lastCart.map(function(c) { return {codigo:c.codigo, producto:c.producto, cantidad:c.cantidad, precio:c.precio}; })
+  };
+  postScript(payload).then(function(d) { if (!d || !d.ok) toast('La cotizacion no quedo registrada en la hoja', 'err'); })
+    .catch(function() { toast('La cotizacion no quedo registrada en la hoja (sin conexion)', 'err'); });
+}
+
+function pagosTexto() {
+  if (!lastPagos.length) return '';
+  var t = '\n\nForma de pago:';
+  for (var i = 0; i < lastPagos.length; i++) {
+    var p = lastPagos[i];
+    if (!p.monto) continue;
+    var nombre = p.label || (p.metodo + (p.banco ? ' ' + p.banco : ''));
+    if (p.metodo === 'Credito') nombre = 'Credito (pendiente de pago)';
+    t += '\n* ' + nombre + ': ' + (p.moneda === 'USD' ? fmtUSD(p.monto) : fmtBS(p.monto));
+  }
+  return t;
+}
+
+function abrirWA() {
+  if (!cliSel) return;
+  var usd = 0;
+  for (var i = 0; i < lastCart.length; i++) usd += lastCart[i].precio * lastCart[i].cantidad;
+  var bs  = Math.round(usd * TASA);
+  var esCot = modoDoc === 'cot';
+  var num = lastPDF ? lastPDF.num : ((esCot ? 'COT-' : 'NE-') + ('000' + (esCot ? COT_NUM : NOTA_NUM)).slice(-4));
+  var lineas = '';
+  for (var i = 0; i < lastCart.length; i++) {
+    var c = lastCart[i];
+    lineas += '\n* ' + c.producto + ' x' + c.cantidad + ' - ' + fmtBS(Math.round(c.precio * c.cantidad * TASA));
+  }
+  var enUSD = esCot && lastPDF && lastPDF.moneda === 'USD';
+  if (enUSD) { lineas = ''; for (var k = 0; k < lastCart.length; k++) lineas += '\n* ' + lastCart[k].producto + ' x' + lastCart[k].cantidad + ' - ' + fmtUSD(lastCart[k].precio * lastCart[k].cantidad); }
+  var msg = 'Repuesto BoParts\n' + (esCot ? 'Cotizacion ' : 'Nota de Entrega ') + num + '\nCliente: ' + cliSel.nombre + '\n' +
+    lineas + '\n\nTOTAL: ' + (enUSD ? fmtUSD(usd) : (esCot ? fmtBS(bs) : fmtBS(bs) + ' (Ref. ' + fmtUSD(usd) + ')')) +
+    (esCot ? '\nValida por 24 horas.' : pagosTexto()) + '\n\n0412-3185778 / 0414-9536708';
+  window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+function toast(msg, type) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(el._t);
+  el._t = setTimeout(function() { el.className = 'toast'; }, type === 'err' ? 7000 : 3500);
+}
+
+// ============================================================
+// NAV
+// ============================================================
+function toggleNav() {
+  document.getElementById('navPan').classList.toggle('open');
+  document.getElementById('navOv').classList.toggle('open');
+}
+function closeNav() {
+  document.getElementById('navPan').classList.remove('open');
+  document.getElementById('navOv').classList.remove('open');
+}
+
+// Lee la respuesta del script con cuidado: si Apps Script devuelve su pagina de error (HTML),
+// r.json() explota con "Unexpected token '<'". Asi se explica que pasa en vez de mostrar eso.
+function leerJSON(r) {
+  return r.text().then(function(t) {
+    try { return JSON.parse(t); }
+    catch (e) {
+      var limpio = String(t).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+      throw new Error('El script no devolvio datos' + (limpio ? ': ' + limpio : '') + '. Revisa que Apps Script este desplegado como Nueva version.');
+    }
+  });
+}
+</script>
+</body>
+</html>

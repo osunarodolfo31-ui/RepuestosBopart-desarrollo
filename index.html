@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<!--
+  Repuesto BoParts — index.html
+  VERSION: v9.6 (2026-09-12) — nav con Gerencia | tasa desde Apps Script v13
+  v9.6: la tasa se lee de CONFIG (la fijan los socios en Gerencia); ya no se edita a mano en cada telefono
+  v9.5: el carrusel de fotos usa desplazamiento nativo con flechas, contador y puntos; antes solo respondia a
+        deslizar con el dedo (en la computadora del local no habia forma de pasar las fotos)
+  v9.3: pantalla de bienvenida con el logo mientras carga; la lista aparece apenas llegan los productos
+        (antes esperaba tambien a la hoja de equivalencias y se quedaba pensando); cada hoja tiene 12 s de limite
+  v9.1: las fotos de Cloudinary se piden en tamano reducido (miniatura en la lista, 900px al ampliar)
+  v9: abre al instante con la ultima lista guardada en el dispositivo y actualiza por detras; productos y equivalencias
+      se piden en paralelo; logo como archivo (el HTML pasa de 175 KB a ~45 KB); compatible con navegadores viejos (sin '?.')
+  v8.1: menu completo (Compras, Gastos, Cobros)
+  v8: lee precios y tasa con coma o punto decimal (la hoja exporta '0,6' si la region es Venezuela)
+  Anterior: v7 = commit 4269b17
+-->
+<html lang="es">
+<head>
+<link rel="stylesheet" href="dev.css">
+<script src="dev-config.js"></script>
+<script src="dev-runtime.js"></script>
+<meta charset="UTF-8">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#F5A800">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BoParts">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Repuesto BoParts · Precios</title>
+<style>
+  .splash{position:fixed;inset:0;z-index:9999;background:#111111;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;transition:opacity .45s ease}
+  .splash img{width:min(58vw,240px);height:auto;animation:splashIn .7s cubic-bezier(.2,.8,.3,1)}
+  .splash-bar{width:120px;height:3px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}
+  .splash-bar span{display:block;height:100%;width:40%;border-radius:2px;background:#F5A800;animation:splashBar 1.1s ease-in-out infinite}
+  .splash.oculto{opacity:0;pointer-events:none}
+  @keyframes splashIn{from{opacity:0;transform:scale(.86)}to{opacity:1;transform:scale(1)}}
+  @keyframes splashBar{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --brand:#F5A800;
+    --brand-dark:#D48E00;
+    --brand-soft:rgba(245,168,0,0.15);
+    --bg:#111111;
+    --bg2:#1A1A1A;
+    --card:#1E1E1E;
+    --card2:#252525;
+    --border:#2E2E2E;
+    --ink:#F0F0F0;
+    --ink-soft:#AAAAAA;
+    --ink-muted:#666666;
+    --radius:14px;
+    --radius-sm:8px;
+  }
+  html,body{height:100%;background:var(--bg);font-family:'Inter',sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+
+  /* HEADER */
+  header{position:sticky;top:0;z-index:50;background:var(--bg2);border-bottom:2px solid var(--brand);padding:12px 16px 10px}
+  .logo-row{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .logo-img{height:36px;width:auto;object-fit:contain}
+  .header-right{margin-left:auto;display:flex;align-items:center;gap:6px}
+  .tasa-badge{font-size:11px;color:var(--brand);background:var(--brand-soft);border:1px solid rgba(245,168,0,0.3);border-radius:20px;padding:4px 10px;cursor:pointer;white-space:nowrap;font-weight:600}
+  .tasa-badge:active{opacity:.7}
+  .refresh-btn{background:none;border:none;cursor:pointer;color:var(--ink-muted);padding:4px;border-radius:6px;display:flex;align-items:center}
+  .refresh-btn:active{color:var(--brand)}
+  .refresh-btn svg{width:16px;height:16px}
+  .spinning{animation:spin .7s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* SEARCH */
+  .search-wrap{position:relative}
+  .search-wrap input{width:100%;height:42px;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:0 40px 0 14px;font-size:15px;font-family:inherit;background:var(--card);color:var(--ink);outline:none;transition:border-color .15s}
+  .search-wrap input:focus{border-color:var(--brand)}
+  .search-wrap input::placeholder{color:var(--ink-muted)}
+  .search-icon{position:absolute;right:13px;top:50%;transform:translateY(-50%);pointer-events:none;color:var(--ink-muted)}
+  .clear-btn{position:absolute;right:11px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--ink-muted);display:none;font-size:20px;line-height:1;padding:2px}
+
+  /* FILTERS */
+  .filters{display:flex;gap:6px;overflow-x:auto;padding:10px 16px 0;scrollbar-width:none;background:var(--bg2)}
+  .filters::-webkit-scrollbar{display:none}
+  .pill{flex-shrink:0;background:var(--card);border:1.5px solid var(--border);border-radius:20px;padding:5px 12px;font-size:12px;font-weight:600;color:var(--ink-soft);cursor:pointer;white-space:nowrap;transition:all .15s;-webkit-tap-highlight-color:transparent}
+  .pill.active{background:var(--brand);border-color:var(--brand);color:#111;font-weight:700}
+
+  /* RESULTS INFO */
+  .results-info{padding:10px 16px 4px;font-size:12px;color:var(--ink-muted)}
+
+  /* LIST */
+  .list{padding:0 12px 80px;display:flex;flex-direction:column;gap:8px}
+
+  /* CARD */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px;cursor:pointer;transition:transform .1s,border-color .15s;-webkit-tap-highlight-color:transparent}
+  .card:active{transform:scale(.985);border-color:var(--brand)}
+  .card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  .card-name{font-size:14px;font-weight:600;line-height:1.35;flex:1;color:var(--ink)}
+  .card-name mark{background:rgba(245,168,0,0.2);color:var(--brand);border-radius:3px;padding:0 2px}
+  .card-price{text-align:right;flex-shrink:0}
+  .card-price .usd{font-size:17px;font-weight:700;color:var(--brand);line-height:1}
+  .card-price .bs{font-size:11px;color:var(--ink-muted);margin-top:2px}
+  .card-meta{margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .badge{font-size:10px;font-weight:600;padding:2px 7px;border-radius:20px}
+  .badge-marca{background:var(--card2);color:var(--ink-soft);border:1px solid var(--border)}
+  .badge-cat{background:var(--brand-soft);color:var(--brand);border:1px solid rgba(245,168,0,0.2)}
+  .card-code{font-size:10px;color:var(--ink-muted);margin-left:auto}
+
+  /* EMPTY / LOADING / ERROR */
+  .state-box{text-align:center;padding:60px 24px;color:var(--ink-muted)}
+  .state-box .icon{font-size:42px;margin-bottom:12px}
+  .state-box p{font-size:14px;line-height:1.6;color:var(--ink-soft)}
+  .state-box .retry{margin-top:16px;background:var(--brand);color:#111;border:none;border-radius:10px;padding:10px 20px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit}
+
+  /* BOTTOM SHEET */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;opacity:0;pointer-events:none;transition:opacity .25s}
+  .overlay.show{opacity:1;pointer-events:auto}
+  .sheet{position:fixed;bottom:0;left:0;right:0;background:var(--bg2);z-index:101;border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:0 0 env(safe-area-inset-bottom,20px);transform:translateY(100%);transition:transform .3s cubic-bezier(.4,0,.2,1);max-height:80vh;overflow-y:auto}
+  .sheet.show{transform:translateY(0)}
+  .sheet-handle{width:40px;height:4px;background:var(--border);border-radius:2px;margin:14px auto 20px}
+  .sheet-body{padding:0 20px 24px}
+  .sheet-cat-badge{display:inline-flex;align-items:center;background:var(--brand-soft);color:var(--brand);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:700;margin-bottom:12px;border:1px solid rgba(245,168,0,0.2)}
+  .sheet-name{font-size:20px;font-weight:700;line-height:1.25;margin-bottom:4px;color:var(--ink)}
+  .sheet-marca{font-size:13px;color:var(--ink-muted);margin-bottom:20px}
+  .sheet-prices{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+  .price-box{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;text-align:center}
+  .price-box .label{font-size:11px;font-weight:600;color:var(--ink-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  .price-box .amount{font-size:24px;font-weight:700;color:var(--ink);line-height:1}
+  .price-box.featured{background:var(--brand-soft);border-color:rgba(245,168,0,0.3)}
+  .price-box.featured .amount{color:var(--brand)}
+  .sheet-code{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 14px;display:flex;align-items:center;justify-content:space-between}
+  .sheet-code .label{font-size:11px;color:var(--ink-muted);font-weight:600}
+  .sheet-code .val{font-size:13px;font-weight:600;color:var(--ink)}
+
+  /* TASA MODAL */
+  .tasa-modal{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(0,0,0,.7);opacity:0;pointer-events:none;transition:opacity .2s}
+  .tasa-modal.show{opacity:1;pointer-events:auto}
+  .tasa-box{background:var(--bg2);border:1px solid var(--border);border-radius:20px;padding:24px;width:100%;max-width:320px}
+  .tasa-box h3{font-size:16px;font-weight:700;margin-bottom:6px;color:var(--ink)}
+  .tasa-box p{font-size:12px;color:var(--ink-muted);margin-bottom:16px;line-height:1.5}
+  .tasa-box input{width:100%;border:1.5px solid var(--border);border-radius:10px;padding:12px 14px;font-size:22px;font-weight:700;font-family:inherit;outline:none;margin-bottom:14px;text-align:center;background:var(--card);color:var(--ink)}
+  .tasa-box input:focus{border-color:var(--brand)}
+  .tasa-actions{display:flex;gap:8px}
+  .tasa-actions button{flex:1;padding:12px;border-radius:10px;font-size:14px;font-weight:600;border:none;cursor:pointer;font-family:inherit}
+  .btn-cancel{background:var(--card);color:var(--ink-soft);border:1px solid var(--border)}
+  .btn-apply{background:var(--brand);color:#111;font-weight:700}
+
+  /* PRODUCT IMAGE IN SHEET */
+  .sheet-img{width:100%;border-radius:12px;overflow:hidden;margin-bottom:16px;background:var(--card);max-height:220px;display:flex;align-items:center;justify-content:center}
+  .sheet-img img{width:100%;max-height:220px;object-fit:contain;border-radius:12px;display:block}
+  .sheet-img-placeholder{width:100%;height:120px;border-radius:12px;background:var(--card);border:1px dashed var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;margin-bottom:16px}
+  .sheet-img-placeholder span{font-size:32px}
+  .sheet-img-placeholder small{font-size:11px;color:var(--ink-muted)}
+
+
+  /* CARRUSEL DE IMÁGENES */
+  .img-carousel{width:100%;margin-bottom:16px;position:relative}
+  .img-track-wrap{overflow:hidden;border-radius:12px;background:var(--card);position:relative}
+  .img-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .img-track::-webkit-scrollbar{display:none}
+  .img-slide{min-width:100%;scroll-snap-align:center;max-height:240px;display:flex;align-items:center;justify-content:center;background:var(--card)}
+  .img-nav{position:absolute;top:50%;transform:translateY(-50%);width:34px;height:34px;border-radius:50%;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:20px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:2}
+  .img-nav:disabled{opacity:.25;cursor:default}
+  .img-nav.prev{left:8px} .img-nav.next{right:8px}
+  .img-count{position:absolute;top:8px;right:8px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;z-index:2}
+  .img-slide img{width:100%;max-height:240px;object-fit:contain;display:block;border-radius:12px}
+  .img-dots{display:flex;justify-content:center;gap:6px;margin-top:8px}
+  .img-dot{width:6px;height:6px;border-radius:50%;background:var(--border);transition:background .2s;cursor:pointer}
+  .img-dot.active{background:var(--brand)}
+  .sheet-img-placeholder{width:100%;height:120px;border-radius:12px;background:var(--card);border:1px dashed var(--border);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;margin-bottom:16px}
+  .sheet-img-placeholder span{font-size:32px}
+  .sheet-img-placeholder small{font-size:11px;color:var(--ink-muted)}
+
+
+  /* SHARE BUTTON */
+  .share-btn{width:100%;padding:13px;background:var(--brand);color:#111;border:none;border-radius:var(--radius);font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:12px;-webkit-tap-highlight-color:transparent}
+  .share-btn:active{opacity:.8}
+  .share-btn svg{width:18px;height:18px;fill:currentColor}
+
+
+  .badge-equiv{background:rgba(99,102,241,0.2);color:#818CF8;border:1px solid rgba(99,102,241,0.3)}
+
+
+  /* NAV MENU */
+  .fab{position:fixed;bottom:20px;right:16px;z-index:90;width:52px;height:52px;background:var(--brand);border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(245,168,0,.4);-webkit-tap-highlight-color:transparent}
+  .fab svg{width:24px;height:24px;fill:#111;transition:transform .2s}
+  .fab.open svg{transform:rotate(45deg)}
+  .nav-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:91;opacity:0;pointer-events:none;transition:opacity .2s}
+  .nav-overlay.show{opacity:1;pointer-events:auto}
+  .nav-panel{position:fixed;bottom:0;left:0;right:0;z-index:92;background:var(--bg2);border-radius:20px 20px 0 0;border-top:2px solid var(--brand);padding:20px 16px 40px;transform:translateY(100%);transition:transform .3s cubic-bezier(.4,0,.2,1)}
+  .nav-panel.show{transform:translateY(0)}
+  .nav-panel-title{font-size:12px;font-weight:700;color:var(--brand);text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px;text-align:center}
+  .nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .nav-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:border-color .15s}
+  .nav-card:active{border-color:var(--brand)}
+  .nav-card .nav-icon{font-size:28px}
+  .nav-card .nav-label{font-size:12px;font-weight:700;color:var(--ink);text-align:center;line-height:1.3}
+  .nav-card .nav-desc{font-size:10px;color:var(--ink-muted);text-align:center}
+  .nav-card.active-module{border-color:var(--brand);background:var(--brand-soft)}
+
+</style>
+</head>
+<body>
+
+<div class="splash" id="splash">
+  <img src="icon-512.png" alt="Repuesto BoParts">
+  <div class="splash-bar"><span></span></div>
+</div>
+
+
+<header>
+  <div class="logo-row">
+    <img src="logo-header.png" alt="Repuesto BoParts" class="logo-img">
+    <div class="header-right">
+      <div class="tasa-badge" id="tasaBadge" onclick="avisoTasa()">Bs <span id="tasaVal">…</span></div>
+      <button class="refresh-btn" id="refreshBtn" onclick="loadData(true)" title="Actualizar">
+        <svg id="refreshIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+      </button>
+    </div>
+  </div>
+  <div class="search-wrap">
+    <input type="search" id="searchInput" placeholder="Buscar repuesto, código o marca…" autocomplete="off" autocorrect="off" spellcheck="false">
+    <svg class="search-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+    <button class="clear-btn" id="clearBtn">×</button>
+  </div>
+</header>
+
+<div class="filters" id="filters">
+  <div class="pill active" data-cat="TODOS">Todos</div>
+  <div class="pill" data-cat="MOTO">Moto</div>
+  <div class="pill" data-cat="CARRO">Carro</div>
+  <div class="pill" data-cat="CAMION">Camión</div>
+  <div class="pill" data-cat="LUBRICANTES Y FLUIDOS">Lubricantes</div>
+  <div class="pill" data-cat="CONSUMIBLES">Consumibles</div>
+</div>
+
+<div class="results-info" id="resultsInfo"></div>
+<div class="list" id="list"></div>
+
+<div class="overlay" id="overlay"></div>
+<div class="sheet" id="sheet">
+  <div class="sheet-handle"></div>
+  <div class="sheet-body" id="sheetBody"></div>
+</div>
+
+<div class="tasa-modal" id="tasaModal">
+  <div class="tasa-box">
+    <h3>Tasa del dólar</h3>
+    <p>Ingresa la tasa BCV actual. Los precios en Bs se recalculan al instante.</p>
+    <input type="number" id="tasaInput" min="1" placeholder="1000">
+    <div class="tasa-actions">
+      <button class="btn-cancel" onclick="closeTasaEditor()">Cancelar</button>
+      <button class="btn-apply" onclick="applyTasa()">Aplicar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CSV_URL = BoPartsDev.csvUrl('products');
+const EQUIV_URL = BoPartsDev.csvUrl('equivalences');
+
+let PRODUCTS = [];
+let EQUIVALENCIAS = []; // {codigoExterno, miCodigo}
+let currentTasa = parseFloat(BoPartsDev.localStorage.getItem('motoauto_tasa') || '1000');
+let query = '';
+let activeCat = 'TODOS';
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  const result = [];
+  for (let i = 0; i < lines.length; i++) {
+    const row = [];
+    let cur = '', inQ = false;
+    for (let c = 0; c < lines[i].length; c++) {
+      const ch = lines[i][c];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { row.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    row.push(cur.trim());
+    result.push(row);
+  }
+  return result;
+}
+
+// v9: cache persistente. Se muestra lo guardado al instante y se actualiza por detras.
+var CACHE_KEY = 'boparts_csv_v9', EQUIV_KEY = 'boparts_equiv_v9';
+
+// Pantalla de bienvenida: se queda al menos SPLASH_MIN ms y se va cuando la lista ya esta lista.
+// Si quieres que dure mas, sube este numero (3000 = 3 segundos).
+var SPLASH_MIN = 1600;
+var splashDesde = Date.now(), splashCerrado = false;
+function cerrarSplash() {
+  if (splashCerrado) return;
+  splashCerrado = true;
+  var falta = Math.max(0, SPLASH_MIN - (Date.now() - splashDesde));
+  setTimeout(function() {
+    var el = document.getElementById('splash');
+    if (!el) return;
+    el.classList.add('oculto');
+    setTimeout(function() { el.style.display = 'none'; }, 500);
+  }, falta);
+}
+setTimeout(cerrarSplash, 6000);   // pase lo que pase, a los 6 s se quita
+function leerCache(k) { try { return BoPartsDev.localStorage.getItem(k); } catch (e) { return null; } }
+function guardarCache(k, v) { try { BoPartsDev.localStorage.setItem(k, v); } catch (e) {} }
+
+function loadData(force) {
+  var icon = document.getElementById('refreshIcon');
+  icon.classList.add('spinning');
+  var cText = force ? null : leerCache(CACHE_KEY);
+  var cEquiv = force ? null : leerCache(EQUIV_KEY);
+  var mostrado = false;
+  if (cText) { aplicarDatos(cText, cEquiv); mostrado = true; } else { showLoading(); }
+
+  // Las dos hojas se piden a la vez, pero la lista se muestra apenas llegan los PRODUCTOS:
+  // las equivalencias solo sirven para buscar por codigo de otra marca y pueden llegar despues.
+  conTiempo(BoPartsDev.fetch(CSV_URL + '&t=' + Date.now()), 12000)
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+    .then(function(text) {
+      if (!isValidCSV(text)) throw new Error('respuesta invalida de la hoja');
+      guardarCache(CACHE_KEY, text);
+      if (!mostrado || text !== cText) aplicarDatos(text, null);
+      icon.classList.remove('spinning');
+      cerrarSplash();
+    })
+    .catch(function(e) {
+      icon.classList.remove('spinning');
+      cerrarSplash();
+      if (!mostrado) showError(e.message);   // con cache: se queda con la ultima lista guardada
+    });
+
+  conTiempo(BoPartsDev.fetch(EQUIV_URL + '&t=' + Date.now()), 12000)
+    .then(function(r) { return r.ok ? r.text() : ''; })
+    .then(function(equivText) {
+      if (!equivText || equivText === cEquiv) return;
+      guardarCache(EQUIV_KEY, equivText);
+      cargarEquivalencias(equivText);
+    })
+    .catch(function() {});
+}
+
+// Corta la espera si Google no responde: sin esto la pantalla se queda pensando sin fin
+function conTiempo(promesa, ms) {
+  return new Promise(function(res, rej) {
+    var t = setTimeout(function() { rej(new Error('la hoja tardo demasiado en responder')); }, ms);
+    promesa.then(function(v) { clearTimeout(t); res(v); }, function(e) { clearTimeout(t); rej(e); });
+  });
+}
+function isValidCSV(t) { return typeof t === 'string' && t.length > 50 && t.indexOf('<html') < 0 && t.indexOf('<!DOCTYPE') < 0; }
+
+function cargarEquivalencias(equivText) {
+  if (!equivText) return;
+  var erows = parseCSV(equivText);
+  EQUIVALENCIAS = [];
+  for (var i = 1; i < erows.length; i++) {
+    var r = erows[i];
+    if (r[0] && r[1]) {
+      EQUIVALENCIAS.push({ codigoExterno: r[0].trim().toUpperCase(), miCodigo: r[1].trim().toUpperCase(), aplicacion: (r[3] || '').trim() });
+    }
+  }
+}
+
+function aplicarDatos(text, equivText) {
+  if (equivText) cargarEquivalencias(equivText);
+  var rows = parseCSV(text);
+  var tasaFromSheet = parseNum((rows[0] || [])[4]);
+  if (tasaFromSheet && !BoPartsDev.localStorage.getItem('motoauto_tasa')) currentTasa = tasaFromSheet;
+  updateTasaBadge();
+  PRODUCTS = [];
+  for (var j = 2; j < rows.length; j++) {
+    var q = rows[j];
+    var prod = (q[2] || '').trim();
+    if (!prod) continue;
+    var precio = parseNum(q[8]);
+    PRODUCTS.push({
+      codigo: (q[0] || '').trim(), marca: (q[1] || '').trim(), producto: prod,
+      categoria: (q[3] || '').trim().toUpperCase(), precio: precio,
+      bs: precio ? Math.round(precio * currentTasa) : 0,
+      imagen: (q[11] || '').trim(), imagen2: (q[12] || '').trim(), imagen3: (q[13] || '').trim()
+    });
+  }
+  search();
+}
+
+function updateTasaBadge() {
+  document.getElementById('tasaVal').textContent = currentTasa.toLocaleString('es-VE');
+}
+// La tasa ya no se edita en cada telefono: la fijan los socios en Gerencia y se sincroniza sola.
+function avisoTasa() {
+  alert('La tasa la fijan Rodolfo o Javier desde Gerencia y se actualiza sola en todos los dispositivos.' +
+        (TASA_FECHA ? '\n\nUltima vez: ' + TASA_FECHA : ''));
+}
+var TASA_FECHA = BoPartsDev.localStorage.getItem('boparts_tasa_fecha') || '';
+function sincronizarTasa() {
+  BoPartsDev.fetch(SCRIPT_URL_CONFIG + '?action=config&t=' + Date.now())
+    .then(r => r.json())
+    .then(d => {
+      if (!d || !d.ok || !(d.tasa > 0)) return;
+      TASA_FECHA = d.fecha || '';
+      try { BoPartsDev.localStorage.setItem('boparts_tasa_fecha', TASA_FECHA); } catch (e) {}
+      if (d.tasa === currentTasa) return;
+      currentTasa = d.tasa;
+      try { BoPartsDev.localStorage.setItem('motoauto_tasa', String(currentTasa)); } catch (e) {}
+      PRODUCTS.forEach(p => { p.bs = p.precio ? Math.round(p.precio * currentTasa) : 0; });
+      updateTasaBadge();
+      search();
+    })
+    .catch(() => {});
+}
+var SCRIPT_URL_CONFIG = BoPartsDev.apiUrl;
+function closeTasaEditor() {
+  document.getElementById('tasaModal').classList.remove('show');
+}
+function applyTasa() {
+  const val = parseFloat(document.getElementById('tasaInput').value);
+  if (!val || val < 1) return;
+  currentTasa = val;
+  BoPartsDev.localStorage.setItem('motoauto_tasa', val);
+  PRODUCTS.forEach(p => { p.bs = p.precio ? Math.round(p.precio * val) : 0 });
+  updateTasaBadge();
+  closeTasaEditor();
+  render(lastFiltered);
+}
+
+function normalize(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function search() {
+  const terms = normalize(query).split(/\s+/).filter(Boolean);
+
+  // Check if query matches any equivalence code
+  let equivCodigos = new Set();
+  if (terms.length) {
+    const queryNorm = normalize(query).trim().toUpperCase();
+    EQUIVALENCIAS.forEach(e => {
+      if (normalize(e.codigoExterno).includes(normalize(queryNorm)) ||
+          normalize(e.codigoExterno) === normalize(queryNorm)) {
+        equivCodigos.add(e.miCodigo.toUpperCase());
+      }
+    });
+  }
+
+  lastFiltered = PRODUCTS.filter(p => {
+    if (activeCat !== 'TODOS' && p.categoria !== activeCat) return false;
+    if (!terms.length) return true;
+    // Match by own fields
+    const hay = normalize(`${p.producto} ${p.marca} ${p.codigo}`);
+    if (terms.every(t => hay.includes(t))) return true;
+    // Match by equivalence
+    if (equivCodigos.size && equivCodigos.has(normalize(p.codigo).toUpperCase())) return true;
+    return false;
+  });
+
+  // Tag products found via equivalence
+  lastFiltered.forEach(p => {
+    p._viaEquiv = equivCodigos.has(normalize(p.codigo).toUpperCase()) &&
+                  !terms.every(t => normalize(`${p.producto} ${p.marca} ${p.codigo}`).includes(t));
+  });
+
+  render(lastFiltered);
+}
+
+let lastFiltered = [];
+
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+function highlight(text, terms) {
+  let s = escHtml(text);
+  terms.forEach(t => {
+    if (!t) return;
+    const re = new RegExp('(' + t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
+    s = s.replace(re, '<mark>$1</mark>');
+  });
+  return s;
+}
+function fmtUSD(n) { return n ? '$' + Number(n).toFixed(2) : '—' }
+function fmtBS(n) { return n ? 'Bs ' + Math.round(n).toLocaleString('es-VE') : '—' }
+
+function showLoading() {
+  document.getElementById('resultsInfo').textContent = '';
+  document.getElementById('list').innerHTML = `<div class="state-box"><div class="icon">⏳</div><p>Cargando productos…</p></div>`;
+}
+function showError(msg) {
+  document.getElementById('list').innerHTML = `<div class="state-box"><div class="icon">⚠️</div><p>No se pudo cargar la lista.<br><small>${msg}</small></p><button class="retry" onclick="loadData(true)">Reintentar</button></div>`;
+}
+
+function render(filtered) {
+  const terms = normalize(query).split(/\s+/).filter(Boolean);
+  const info = document.getElementById('resultsInfo');
+  const list = document.getElementById('list');
+  info.textContent = query || activeCat !== 'TODOS'
+    ? `${filtered.length} resultado${filtered.length !== 1 ? 's' : ''}`
+    : `${PRODUCTS.length} productos`;
+  if (!filtered.length) {
+    list.innerHTML = `<div class="state-box"><div class="icon">🔍</div><p>Sin resultados para <strong>"${escHtml(query)}"</strong>.</p></div>`;
+    return;
+  }
+  const slice = filtered.slice(0, 150);
+  list.innerHTML = slice.map(p => `
+    <div class="card" onclick="openDetail(${PRODUCTS.indexOf(p)})">
+      <div class="card-top">
+        <div class="card-name">${highlight(p.producto, terms)}</div>
+        <div class="card-price">
+          <div class="usd">${fmtUSD(p.precio)}</div>
+          <div class="bs">${fmtBS(p.bs)}</div>
+        </div>
+      </div>
+      <div class="card-meta">
+        ${p.marca ? `<span class="badge badge-marca">${escHtml(p.marca)}</span>` : ''}
+        <span class="badge badge-cat">${escHtml(p.categoria)}</span>
+        ${p._viaEquiv ? '<span class="badge badge-equiv">↔ Equivalencia</span>' : ''}
+        ${p.codigo ? `<span class="card-code">#${escHtml(p.codigo)}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+  if (filtered.length > 150) {
+    list.innerHTML += `<div style="text-align:center;padding:16px;font-size:12px;color:var(--ink-muted)">Mostrando 150 de ${filtered.length}. Afina la búsqueda.</div>`;
+  }
+}
+
+const overlay = document.getElementById('overlay');
+const sheet = document.getElementById('sheet');
+
+function openDetail(idx) {
+  const p = PRODUCTS[idx];
+  if (!p) return;
+  const imgs = [p.imagen, p.imagen2, p.imagen3].filter(Boolean);
+  let imgHtml = '';
+  if (imgs.length > 0) {
+    const slides = imgs.map((url, i) =>
+      `<div class="img-slide"><img src="${cldn(url, 900)}" loading="lazy" alt="foto ${i+1}" onerror="this.style.display='none'"></div>`
+    ).join('');
+    const dots = imgs.length > 1 ? `<div class="img-dots">${imgs.map((_,i) => `<div class="img-dot${i===0?' active':''}" onclick="goSlide(${idx},${i})"></div>`).join('')}</div>` : '';
+    const flechas = imgs.length > 1
+      ? `<button class="img-nav prev" onclick="mueveSlide(${idx},-1)" disabled>&#8249;</button>
+         <button class="img-nav next" onclick="mueveSlide(${idx},1)">&#8250;</button>
+         <div class="img-count" id="count-${idx}">1/${imgs.length}</div>` : '';
+    imgHtml = `<div class="img-carousel" id="car-${idx}"><div class="img-track-wrap"><div class="img-track" id="track-${idx}" onscroll="syncSlide(${idx})">${slides}</div>${flechas}</div>${dots}</div>`;
+  } else {
+    imgHtml = `<div class="sheet-img-placeholder"><span>📷</span><small>Sin imagen aún</small></div>`;
+  }
+  document.getElementById('sheetBody').innerHTML = imgHtml + `
+    <div class="sheet-cat-badge">${escHtml(p.categoria)}</div>
+    <div class="sheet-name">${escHtml(p.producto)}</div>
+    <div class="sheet-marca">${escHtml(p.marca) || '&nbsp;'}</div>
+    <div class="sheet-prices">
+      <div class="price-box featured">
+        <div class="label">Dólares</div>
+        <div class="amount">${fmtUSD(p.precio)}</div>
+      </div>
+      <div class="price-box">
+        <div class="label">Bolívares</div>
+        <div class="amount" style="font-size:${p.bs > 99999 ? '16px' : '22px'}">${fmtBS(p.bs)}</div>
+      </div>
+    </div>
+    ${p.codigo ? `<div class="sheet-code"><span class="label">Código</span><span class="val">${escHtml(p.codigo)}</span></div>` : ''}
+    <button class="share-btn" onclick="shareProduct(${idx})">
+      <svg viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"/></svg>
+      Compartir por WhatsApp
+    </button>
+  `;
+  overlay.classList.add('show');
+  sheet.classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+function closeDetail() {
+  overlay.classList.remove('show');
+  sheet.classList.remove('show');
+  document.body.style.overflow = '';
+}
+overlay.addEventListener('click', closeDetail);
+let startY = 0;
+sheet.addEventListener('touchstart', e => { startY = e.touches[0].clientY }, { passive: true });
+sheet.addEventListener('touchend', e => { if (e.changedTouches[0].clientY - startY > 80) closeDetail() }, { passive: true });
+
+const searchInput = document.getElementById('searchInput');
+const clearBtn = document.getElementById('clearBtn');
+searchInput.addEventListener('input', () => {
+  query = searchInput.value;
+  clearBtn.style.display = query ? 'block' : 'none';
+  document.querySelector('.search-icon').style.display = query ? 'none' : 'block';
+  search();
+});
+clearBtn.addEventListener('click', () => {
+  searchInput.value = ''; query = '';
+  clearBtn.style.display = 'none';
+  document.querySelector('.search-icon').style.display = 'block';
+  searchInput.focus();
+  search();
+});
+document.getElementById('filters').addEventListener('click', e => {
+  const pill = e.target.closest('.pill');
+  if (!pill) return;
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  pill.classList.add('active');
+  activeCat = pill.dataset.cat;
+  search();
+});
+
+updateTasaBadge();
+loadData();
+sincronizarTasa();
+
+function shareProduct(idx) {
+  const p = PRODUCTS[idx];
+  if (!p) return;
+  const nombre = p.producto;
+  const codigo = p.codigo ? `📦 Código: ${p.codigo}\n` : '';
+  const bs = p.bs ? `Bs ${Math.round(p.bs).toLocaleString('es-VE')}` : '—';
+  const usd = p.precio ? `$${Number(p.precio).toFixed(2)}` : '—';
+  const imgs = [p.imagen, p.imagen2, p.imagen3].filter(Boolean);
+  const fotoLinks = imgs.length ? '\n🖼️ ' + imgs.join('\n🖼️ ') : '';
+
+  const msg = `🔧 *${nombre}*\n${codigo}\n💵 Precio: ${bs}\n🤑 Oferta en Divisa: ${usd}\n\n_Cancelando en dólares obtienes un precio preferencial_ 😉${fotoLinks}\n\n📍 *Repuesto BoParts*\n📞 0412-3185778 / 0414-9536708`;
+
+  const url = 'https://wa.me/?text=' + encodeURIComponent(msg);
+  window.open(url, '_blank');
+}
+
+// El carrusel se desplaza de verdad (scroll horizontal): funciona con el dedo, con las flechas y en la PC.
+function goSlide(idx, slide) {
+  const track = document.getElementById('track-' + idx);
+  if (!track) return;
+  track.scrollTo({left: slide * track.clientWidth, behavior: 'smooth'});
+  marcarSlide(idx, slide);
+}
+function mueveSlide(idx, paso) {
+  const track = document.getElementById('track-' + idx);
+  if (!track) return;
+  const total = track.children.length;
+  const actual = Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+  goSlide(idx, Math.min(total - 1, Math.max(0, actual + paso)));
+}
+function syncSlide(idx) {
+  const track = document.getElementById('track-' + idx);
+  if (!track) return;
+  clearTimeout(track._t);
+  track._t = setTimeout(() => marcarSlide(idx, Math.round(track.scrollLeft / Math.max(1, track.clientWidth))), 60);
+}
+function marcarSlide(idx, slide) {
+  const car = document.getElementById('car-' + idx);
+  if (!car) return;
+  car.querySelectorAll('.img-dot').forEach((d, i) => d.classList.toggle('active', i === slide));
+  const total = car.querySelectorAll('.img-slide').length;
+  const c = document.getElementById('count-' + idx);
+  if (c) c.textContent = (slide + 1) + '/' + total;
+  const prev = car.querySelector('.img-nav.prev'), next = car.querySelector('.img-nav.next');
+  if (prev) prev.disabled = slide <= 0;
+  if (next) next.disabled = slide >= total - 1;
+}
+
+// El deslizamiento con el dedo lo maneja el navegador (scroll-snap): ya no hace falta codigo propio.
+</script>
+
+<button class="fab" id="fabBtn" onclick="toggleNav()">
+  <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" stroke="#111" stroke-width="2.5" stroke-linecap="round" fill="none"/></svg>
+</button>
+
+<div class="nav-overlay" id="navOverlay" onclick="closeNav()"></div>
+<div class="nav-panel" id="navPanel">
+  <div class="nav-panel-title">🔧 Repuesto BoParts</div>
+  <div class="nav-grid">
+    <a class="nav-card cur" href="index.html">
+      <span class="nav-icon">📋</span>
+      <span class="nav-label">Lista de Precios</span>
+      <span class="nav-desc">Consulta y busqueda</span>
+    </a>
+    <a class="nav-card" href="boparts_ventas.html">
+      <span class="nav-icon">💰</span>
+      <span class="nav-label">Registrar Venta</span>
+      <span class="nav-desc">Nueva venta</span>
+    </a>
+    <a class="nav-card" href="boparts_fotos.html">
+      <span class="nav-icon">📷</span>
+      <span class="nav-label">Cargar Fotos</span>
+      <span class="nav-desc">Catalogo imagenes</span>
+    </a>
+    <a class="nav-card" href="boparts_demanda.html">
+      <span class="nav-icon">📝</span>
+      <span class="nav-label">Demanda</span>
+      <span class="nav-desc">No atendida</span>
+    </a>
+    <a class="nav-card" href="boparts_compras.html">
+      <span class="nav-icon">📦</span>
+      <span class="nav-label">Compras</span>
+      <span class="nav-desc">Recibir mercancia</span>
+    </a>
+    <a class="nav-card" href="boparts_gastos.html">
+      <span class="nav-icon">💸</span>
+      <span class="nav-label">Gastos</span>
+      <span class="nav-desc">Registrar gasto</span>
+    </a>
+    <a class="nav-card" href="boparts_cobros.html">
+      <span class="nav-icon">🧾</span>
+      <span class="nav-label">Cobros</span>
+      <span class="nav-desc">Cuentas por cobrar</span>
+    </a>
+    <a class="nav-card" href="boparts_gerencia.html">
+      <span class="nav-icon">📊</span>
+      <span class="nav-label">Gerencia</span>
+      <span class="nav-desc">Solo socios</span>
+    </a>
+    <a class="nav-card" href="boparts_apartados.html">
+      <span class="nav-icon">🔖</span>
+      <span class="nav-label">Apartados</span>
+      <span class="nav-desc">Y contra pedido</span>
+    </a>
+    <a class="nav-card" href="boparts_devoluciones.html">
+      <span class="nav-icon">↩️</span>
+      <span class="nav-label">Devoluciones</span>
+      <span class="nav-desc">Y cambios</span>
+    </a>
+    <a class="nav-card" href="boparts_inventario.html">
+      <span class="nav-icon">🧮</span>
+      <span class="nav-label">Inventario</span>
+      <span class="nav-desc">Conteo de stock</span>
+    </a>
+  </div>
+</div>
+
+<script>
+function toggleNav(){
+  const open = document.getElementById('navPanel').classList.toggle('show');
+  document.getElementById('navOverlay').classList.toggle('show', open);
+  document.getElementById('fabBtn').classList.toggle('open', open);
+}
+function closeNav(){
+  document.getElementById('navPanel').classList.remove('show');
+  document.getElementById('navOverlay').classList.remove('show');
+  document.getElementById('fabBtn').classList.remove('open');
+}
+
+// Convierte '0,6', '7,5', '$ 6.04', '1,234.56' o 6.04 en numero. Devuelve 0 si no puede.
+// Pide a Cloudinary la foto reducida: w_900 al ampliar, calidad y formato automaticos.
+// Una foto de 4 MB baja a ~80 KB sin diferencia visible en pantalla.
+function cldn(url, w) {
+  var u = String(url || '');
+  if (u.indexOf('res.cloudinary.com') < 0 || u.indexOf('/upload/') < 0) return u;
+  if (/\/upload\/(?:[a-z]+_[^\/,]+[,\/])/.test(u)) return u;          // ya trae transformaciones
+  return u.replace('/upload/', '/upload/w_' + (w || 900) + ',q_auto,f_auto/');
+}
+function parseNum(v) {
+  if (typeof v === 'number') return v;
+  var t = String(v == null ? '' : v).replace(/[^0-9.,-]/g, '');
+  if (!t) return 0;
+  if (t.indexOf(',') >= 0 && t.indexOf('.') >= 0) {
+    // ambos: el ultimo separador es el decimal
+    if (t.lastIndexOf(',') > t.lastIndexOf('.')) t = t.replace(/\./g, '').replace(',', '.'); else t = t.replace(/,/g, '');
+  } else if (t.indexOf(',') >= 0) {
+    t = t.replace(',', '.');
+  }
+  var n = parseFloat(t);
+  return isNaN(n) ? 0 : n;
+}
+</script>
+
+</body>
+</html>

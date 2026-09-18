@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<!--
+  Repuesto BoParts — boparts_fotos.html
+  VERSION: v8.3 (2026-09-11) — nav con Gerencia | requiere Apps Script v11.5
+  v8.2: logo en el encabezado
+  v8.1: cada casilla tiene boton de camara y de galeria por separado; vista previa desde el archivo local (no del link,
+        que puede tardar en propagar); el nombre en Cloudinary lleva fecha+hora para no chocar con una foto anterior
+  v8: galeria ademas de camara; las fotos se comprimen en el telefono antes de subir (max 1400px, ~150-250 KB);
+      nombre en Cloudinary por codigo de producto (boparts/CODIGO_1); guardado con respuesta del script;
+      el script ubica el producto por codigo (antes por numero de fila); version visible en el encabezado
+-->
+<html lang="es">
+<head>
+<link rel="stylesheet" href="dev.css">
+<script src="dev-config.js"></script>
+<script src="dev-runtime.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>BoParts · Cargar Fotos</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --brand:#F5A800;--brand-soft:rgba(245,168,0,0.15);
+    --bg:#111;--bg2:#1A1A1A;--card:#1E1E1E;--border:#2E2E2E;
+    --ink:#F0F0F0;--ink-soft:#AAA;--ink-muted:#666;
+    --radius:14px;--radius-sm:8px;--green:#22C55E;--red:#EF4444;
+  }
+  html,body{min-height:100%;background:var(--bg);font-family:'Inter',sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+  header{background:var(--bg2);border-bottom:2px solid var(--brand);padding:14px 16px;display:flex;align-items:center;gap:10px;position:sticky;top:0;z-index:50}
+  header img{height:38px;border-radius:4px}
+  header h1{font-size:15px;font-weight:700;color:var(--ink);line-height:1.2}
+  header p{font-size:11px;color:var(--ink-muted)}
+
+  .container{padding:16px;max-width:500px;margin:0 auto}
+
+  /* SEARCH */
+  .search-wrap{position:relative;margin-bottom:16px}
+  .search-wrap input{width:100%;height:46px;border:1.5px solid var(--border);border-radius:var(--radius-sm);padding:0 14px;font-size:15px;font-family:inherit;background:var(--card);color:var(--ink);outline:none;transition:border-color .15s}
+  .search-wrap input:focus{border-color:var(--brand)}
+  .search-wrap input::placeholder{color:var(--ink-muted)}
+
+  /* DROPDOWN */
+  .dropdown{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;margin-top:4px;display:none}
+  .dropdown.show{display:block}
+  .drop-item{padding:10px 14px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--border);color:var(--ink)}
+  .drop-item:last-child{border-bottom:none}
+  .drop-item:active{background:var(--brand-soft)}
+  .drop-item .cat{font-size:10px;color:var(--brand);font-weight:600;margin-left:6px}
+
+  /* SELECTED PRODUCT */
+  .selected-product{background:var(--card);border:1.5px solid var(--brand);border-radius:var(--radius);padding:14px;margin-bottom:16px;display:none}
+  .selected-product.show{display:block}
+  .sp-name{font-size:15px;font-weight:700;margin-bottom:4px}
+  .sp-meta{font-size:12px;color:var(--ink-muted)}
+  .sp-clear{float:right;background:none;border:none;color:var(--ink-muted);cursor:pointer;font-size:18px;line-height:1;margin-top:-2px}
+
+  /* UPLOAD ZONES */
+  .photos-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px}
+  .photo-slot{aspect-ratio:1;border:1.5px dashed var(--border);border-radius:var(--radius-sm);display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;position:relative;overflow:hidden;background:var(--card);transition:border-color .15s}
+  .photo-slot:active{border-color:var(--brand)}
+  .photo-slot .slot-label{font-size:10px;color:var(--ink-muted);margin-top:6px;font-weight:600}
+  .photo-slot .slot-icon{font-size:28px}
+  .photo-slot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .photo-slot .remove-btn{position:absolute;top:4px;right:4px;background:rgba(0,0,0,.7);border:none;color:#fff;border-radius:50%;width:22px;height:22px;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+  .photo-slot input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0}
+  .photo-slot.uploading{border-color:var(--brand)}
+  .photo-slot .progress{position:absolute;bottom:0;left:0;height:3px;background:var(--brand);transition:width .3s}
+  .slot-actions{position:absolute;inset:auto 0 0 0;display:flex;border-top:1px solid var(--border)}
+  .slot-actions label{flex:1;text-align:center;font-size:15px;padding:6px 0;cursor:pointer;background:rgba(0,0,0,.35);position:relative}
+  .slot-actions label:first-child{border-right:1px solid var(--border)}
+  .slot-actions input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;font-size:0}
+
+  /* STATUS */
+  .slot-status{position:absolute;top:4px;left:4px;font-size:10px;font-weight:700;padding:2px 5px;border-radius:4px}
+  .slot-status.ok{background:var(--green);color:#fff}
+  .slot-status.err{background:var(--red);color:#fff}
+
+  /* SAVE BTN */
+  .save-btn{width:100%;padding:14px;background:var(--brand);color:#111;border:none;border-radius:var(--radius);font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;transition:opacity .15s;display:none}
+  .save-btn.show{display:block}
+  .save-btn:disabled{opacity:.5;cursor:not-allowed}
+
+  /* TOAST */
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);background:#222;color:#fff;padding:12px 20px;border-radius:30px;font-size:13px;font-weight:600;transition:transform .3s;z-index:200;white-space:nowrap;border:1px solid var(--border)}
+  .toast.show{transform:translateX(-50%) translateY(0)}
+  .toast.success{border-color:var(--green);color:var(--green)}
+  .toast.error{border-color:var(--red);color:var(--red)}
+
+  /* INFO */
+  .info-box{background:var(--brand-soft);border:1px solid rgba(245,168,0,.3);border-radius:var(--radius-sm);padding:12px 14px;font-size:12px;color:var(--ink-soft);line-height:1.5;margin-bottom:16px}
+  .info-box strong{color:var(--brand)}
+
+  .fab{position:fixed;bottom:20px;right:16px;z-index:90;width:52px;height:52px;background:#F5A800;border:none;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 16px rgba(245,168,0,.4);-webkit-tap-highlight-color:transparent}
+  .fab svg{width:24px;height:24px;transition:transform .2s}
+  .fab.open svg{transform:rotate(45deg)}
+  .nav-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:91;opacity:0;pointer-events:none;transition:opacity .2s}
+  .nav-overlay.show{opacity:1;pointer-events:auto}
+  .nav-panel{position:fixed;bottom:0;left:0;right:0;z-index:92;background:#1A1A1A;border-radius:20px 20px 0 0;border-top:2px solid #F5A800;padding:20px 16px 40px;transform:translateY(100%);transition:transform .3s cubic-bezier(.4,0,.2,1)}
+  .nav-panel.show{transform:translateY(0)}
+  .nav-panel-title{font-size:12px;font-weight:700;color:#F5A800;text-transform:uppercase;letter-spacing:.5px;margin-bottom:16px;text-align:center}
+  .nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .nav-card{background:#1E1E1E;border:1px solid #2E2E2E;border-radius:14px;padding:16px 12px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:border-color .15s}
+  .nav-card:active{border-color:#F5A800}
+  .nav-card .nav-icon{font-size:28px}
+  .nav-card .nav-label{font-size:12px;font-weight:700;color:#F0F0F0;text-align:center;line-height:1.3}
+  .nav-card .nav-desc{font-size:10px;color:#666;text-align:center}
+  .nav-card.active-module{border-color:#F5A800;background:rgba(245,168,0,0.1)}
+
+</style>
+</head>
+<body>
+
+<header>
+  <img src="logo-header.png" alt="BoParts" style="height:34px;width:auto;margin-right:10px;flex:0 0 auto">
+  <div>
+    <h1>BoParts · Cargar Fotos</h1>
+    <p>Selecciona un producto y sube hasta 3 fotos</p>
+  </div>
+</header>
+
+<div class="container">
+  <div class="info-box">
+    <strong>Cómo usar:</strong> Busca el producto → toca las zonas de foto → la app sube a Cloudinary y guarda el link en tu Google Sheet automáticamente.
+  </div>
+
+  <div class="search-wrap">
+    <input type="search" id="searchInput" placeholder="Buscar producto por nombre o código…" autocomplete="off">
+    <div class="dropdown" id="dropdown"></div>
+  </div>
+
+  <div class="selected-product" id="selectedProduct">
+    <button class="sp-clear" onclick="clearSelection()">×</button>
+    <div class="sp-name" id="spName"></div>
+    <div class="sp-meta" id="spMeta"></div>
+  </div>
+
+  <div class="photos-grid" id="photosGrid" style="display:none">
+    <div class="photo-slot" id="slot0"></div>
+    <div class="photo-slot" id="slot1"></div>
+    <div class="photo-slot" id="slot2"></div>
+  </div>
+
+  <button class="save-btn" id="saveBtn" onclick="saveToSheet()">💾 Guardar en catálogo</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ── CONFIGURACIÓN ──────────────────────────────────────────────
+const CLOUDINARY_CLOUD = 'DEV_UPLOADS_DISABLED';
+const CLOUDINARY_UPLOAD_PRESET = 'DEV_UPLOADS_DISABLED'; // crear en Cloudinary (unsigned)
+const CSV_URL = BoPartsDev.csvUrl('products');
+const APPS_SCRIPT_URL = BoPartsDev.apiUrl;
+
+// ── ESTADO ────────────────────────────────────────────────────
+let PRODUCTS = [];
+let selectedProduct = null;
+let uploadedUrls = [null, null, null];
+
+// ── CARGAR PRODUCTOS ──────────────────────────────────────────
+async function loadProducts() {
+  try {
+    const res = await BoPartsDev.fetch(CSV_URL + '&t=' + Date.now());
+    const text = await res.text();
+    const rows = parseCSV(text);
+    PRODUCTS = [];
+    for (let i = 2; i < rows.length; i++) {
+      const r = rows[i];
+      if (!(r[2] || '').trim()) continue;
+      PRODUCTS.push({
+        row: i + 1, // fila real en Sheet (1-based, fila 1 = tasa, fila 2 = headers)
+        codigo: (r[0] || '').trim(),
+        marca: (r[1] || '').trim(),
+        producto: (r[2] || '').trim(),
+        categoria: (r[3] || '').trim(),
+        imagen: (r[11] || '').trim(),
+        imagen2: (r[12] || '').trim(),
+        imagen3: (r[13] || '').trim(),
+      });
+    }
+    showToast(`${PRODUCTS.length} productos cargados`, 'success');
+  } catch(e) {
+    showToast('Error cargando productos', 'error');
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.split(/\r?\n/);
+  return lines.map(line => {
+    const row = []; let cur = '', inQ = false;
+    for (const ch of line) {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { row.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    row.push(cur.trim());
+    return row;
+  });
+}
+
+// ── BÚSQUEDA ──────────────────────────────────────────────────
+function normalize(s) {
+  return (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+}
+
+const searchInput = document.getElementById('searchInput');
+const dropdown = document.getElementById('dropdown');
+
+searchInput.addEventListener('input', () => {
+  const q = normalize(searchInput.value).trim();
+  if (!q || q.length < 2) { dropdown.classList.remove('show'); return; }
+  const results = PRODUCTS.filter(p => {
+    const hay = normalize(`${p.producto} ${p.codigo} ${p.marca}`);
+    return q.split(/\s+/).every(t => hay.includes(t));
+  }).slice(0, 20);
+  if (!results.length) { dropdown.classList.remove('show'); return; }
+  dropdown.innerHTML = results.map((p,i) => `
+    <div class="drop-item" onclick="selectProduct(${PRODUCTS.indexOf(p)})">
+      ${p.producto} <span class="cat">${p.categoria}</span>
+      ${p.codigo ? `<br><small style="color:var(--ink-muted)">#${p.codigo}</small>` : ''}
+    </div>
+  `).join('');
+  dropdown.classList.add('show');
+});
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.search-wrap')) dropdown.classList.remove('show');
+});
+
+function selectProduct(idx) {
+  selectedProduct = PRODUCTS[idx];
+  previewUrls.forEach((u, i) => { if (u) URL.revokeObjectURL(u); previewUrls[i] = null; });
+  uploadedUrls = [
+    selectedProduct.imagen || null,
+    selectedProduct.imagen2 || null,
+    selectedProduct.imagen3 || null
+  ];
+  searchInput.value = '';
+  dropdown.classList.remove('show');
+  document.getElementById('spName').textContent = selectedProduct.producto;
+  document.getElementById('spMeta').textContent =
+    `${selectedProduct.categoria}${selectedProduct.marca ? ' · ' + selectedProduct.marca : ''}${selectedProduct.codigo ? ' · #' + selectedProduct.codigo : ''}`;
+  document.getElementById('selectedProduct').classList.add('show');
+  document.getElementById('photosGrid').style.display = 'grid';
+  document.getElementById('saveBtn').classList.add('show');
+  // Show existing images
+  [0,1,2].forEach(i => renderSlot(i));
+}
+
+function clearSelection() {
+  selectedProduct = null;
+  uploadedUrls = [null,null,null];
+  previewUrls.forEach((u, i) => { if (u) URL.revokeObjectURL(u); previewUrls[i] = null; });
+  document.getElementById('selectedProduct').classList.remove('show');
+  document.getElementById('photosGrid').style.display = 'none';
+  document.getElementById('saveBtn').classList.remove('show');
+  [0,1,2].forEach(i => renderSlot(i));
+}
+
+// Botones separados: la camara necesita capture="environment"; sin el, Android abre solo la galeria.
+function botonesSlot(i) {
+  return `<div class="slot-actions">
+    <label title="Camara">📷<input type="file" accept="image/*" capture="environment" onchange="handleFile(this,${i})"></label>
+    <label title="Galeria">🖼️<input type="file" accept="image/*" onchange="handleFile(this,${i})"></label>
+  </div>`;
+}
+
+function renderSlot(i) {
+  const slot = document.getElementById('slot'+i);
+  const url = previewUrls[i] || uploadedUrls[i];
+  if (url) {
+    slot.innerHTML = `
+      <img src="${url}" alt="foto ${i+1}">
+      <button class="remove-btn" onclick="removePhoto(${i})">×</button>
+      <span class="slot-status ok">✓</span>
+      ${botonesSlot(i)}
+    `;
+  } else {
+    slot.innerHTML = `<span class="slot-icon">📷</span><span class="slot-label">Foto ${i+1}</span>${botonesSlot(i)}`;
+  }
+}
+
+// Vista previa tomada del archivo del telefono: se ve al instante y no depende de que el link ya este publicado
+var previewUrls = [null, null, null];
+function removePhoto(i) {
+  uploadedUrls[i] = null;
+  if (previewUrls[i]) { URL.revokeObjectURL(previewUrls[i]); previewUrls[i] = null; }
+  renderSlot(i);
+}
+
+// ── UPLOAD A CLOUDINARY ───────────────────────────────────────
+async function handleFile(input, slotIdx) {
+  const file = input.files[0];
+  if (!file) return;
+  const slot = document.getElementById('slot'+slotIdx);
+
+  // Vista previa inmediata del archivo elegido
+  if (previewUrls[slotIdx]) URL.revokeObjectURL(previewUrls[slotIdx]);
+  previewUrls[slotIdx] = URL.createObjectURL(file);
+  slot.innerHTML = `<img src="${previewUrls[slotIdx]}" alt="subiendo"><span class="slot-label" style="position:absolute;bottom:6px;left:0;right:0;background:rgba(0,0,0,.6);padding:3px">Subiendo…</span><div class="progress" id="prog${slotIdx}" style="width:0%"></div>`;
+
+  let blob = file;
+  try { blob = await comprimir(file, 1400, 0.82); } catch(e) {}   // si falla, se sube el original
+
+  const formData = new FormData();
+  formData.append('file', blob, 'foto.jpg');
+  formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  formData.append('folder', 'boparts');
+  // Nombre legible por codigo (requiere en el preset de Cloudinary: "Use filename or externally defined public ID")
+  const slug = (selectedProduct && selectedProduct.codigo ? selectedProduct.codigo : 'sin-codigo')
+    .toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/^-|-$/g, '');
+  // Fecha+hora al final: el preset no permite sobrescribir (es unsigned), asi que un nombre repetido
+  // devolveria la foto vieja en vez de la nueva. Con la marca de tiempo cada subida es un archivo propio.
+  const d = new Date(), st = String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0') + String(d.getHours()).padStart(2,'0') + String(d.getMinutes()).padStart(2,'0');
+  formData.append('public_id', `${slug}_${slotIdx + 1}_${st}`);
+
+  try {
+    const res = await BoPartsDev.fetch(`https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD}/image/upload`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (data.secure_url) {
+      uploadedUrls[slotIdx] = data.secure_url;
+      renderSlot(slotIdx);   // sigue mostrando la vista previa local; el link queda guardado
+      showToast(`Foto subida ✓ (${Math.round(blob.size / 1024)} KB)`, 'success');
+    } else {
+      throw new Error(data.error?.message || 'Error');
+    }
+  } catch(e) {
+    if (previewUrls[slotIdx]) { URL.revokeObjectURL(previewUrls[slotIdx]); previewUrls[slotIdx] = null; }
+    slot.innerHTML = `<span class="slot-icon">⚠️</span><span class="slot-label" style="color:var(--red)">Error</span>${botonesSlot(slotIdx)}`;
+    showToast('Error subiendo foto: ' + e.message, 'error');
+  }
+}
+
+// Reduce la foto en el telefono antes de subir: menos datos al subir y al verla en la lista
+function comprimir(file, maxPx, calidad) {
+  return new Promise((res, rej) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const sc = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(img.width * sc); cv.height = Math.round(img.height * sc);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      cv.toBlob(b => b ? res(b) : rej(new Error('sin blob')), 'image/jpeg', calidad);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('no se pudo leer la imagen')); };
+    img.src = url;
+  });
+}
+
+// ── GUARDAR EN SHEET ──────────────────────────────────────────
+async function saveToSheet() {
+  if (!selectedProduct) return;
+  if (!uploadedUrls.some(Boolean)) {
+    showToast('Sube al menos una foto primero', 'error');
+    return;
+  }
+  if (!APPS_SCRIPT_URL) {
+    // Fallback: show URLs to copy manually
+    const urls = uploadedUrls.filter(Boolean);
+    const text = `Fila ${selectedProduct.row} en la Sheet:\nL: ${uploadedUrls[0]||''}\nM: ${uploadedUrls[1]||''}\nN: ${uploadedUrls[2]||''}`;
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(urls.join('\n'));
+      showToast('URLs copiadas al portapapeles ✓', 'success');
+    }
+    alert('URLs de las fotos:\n\n' + text);
+    return;
+  }
+  const btn = document.getElementById('saveBtn');
+  btn.disabled = true;
+  btn.textContent = 'Guardando…';
+  try {
+    const r = await BoPartsDev.fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: {'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({
+        row: selectedProduct.row,
+        codigo: selectedProduct.codigo,          // el script prefiere el codigo: si alguien ordena la hoja, la fila cambia
+        producto: selectedProduct.producto,
+        imagen: uploadedUrls[0] || '',
+        imagen2: uploadedUrls[1] || '',
+        imagen3: uploadedUrls[2] || ''
+      })
+    });
+    const txt = await r.text();
+    let d; try { d = JSON.parse(txt); } catch(e) { throw new Error('El script respondió: ' + txt.replace(/<[^>]+>/g,' ').slice(0,80)); }
+    if (!d || d.ok !== true) throw new Error(d && d.error ? d.error : 'Respuesta inesperada');
+    showToast('¡Guardado en catálogo! ✓', 'success');
+    // Update local data
+    selectedProduct.imagen = uploadedUrls[0] || selectedProduct.imagen;
+    selectedProduct.imagen2 = uploadedUrls[1] || selectedProduct.imagen2;
+    selectedProduct.imagen3 = uploadedUrls[2] || selectedProduct.imagen3;
+    setTimeout(clearSelection, 1500);
+  } catch(e) {
+    showToast('NO se guardó: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Guardar en catálogo';
+  }
+}
+
+// ── TOAST ─────────────────────────────────────────────────────
+function showToast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + type;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+// ── INIT ──────────────────────────────────────────────────────
+const APP_VERSION = 'v8';
+const hdrP = document.querySelector('.header-text p, header p');
+if (hdrP) hdrP.textContent = APP_VERSION + ' · ' + hdrP.textContent;
+[0,1,2].forEach(i => renderSlot(i));
+loadProducts();
+</script>
+
+<button class="fab" id="fabBtn" onclick="toggleNav()">
+  <svg viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="2.5" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+</button>
+<div class="nav-overlay" id="navOverlay" onclick="closeNav()"></div>
+<div class="nav-panel" id="navPanel">
+  <div class="nav-panel-title">Repuesto BoParts</div>
+  <div class="nav-grid">
+    <a class="nav-card" href="index.html">
+      <span class="nav-icon">📋</span>
+      <span class="nav-label">Lista de Precios</span>
+      <span class="nav-desc">Consulta y busqueda</span>
+    </a>
+    <a class="nav-card" href="boparts_ventas.html">
+      <span class="nav-icon">💰</span>
+      <span class="nav-label">Registrar Venta</span>
+      <span class="nav-desc">Nueva venta</span>
+    </a>
+    <a class="nav-card cur" href="boparts_fotos.html">
+      <span class="nav-icon">📷</span>
+      <span class="nav-label">Cargar Fotos</span>
+      <span class="nav-desc">Catalogo imagenes</span>
+    </a>
+    <a class="nav-card" href="boparts_demanda.html">
+      <span class="nav-icon">📝</span>
+      <span class="nav-label">Demanda</span>
+      <span class="nav-desc">No atendida</span>
+    </a>
+    <a class="nav-card" href="boparts_compras.html">
+      <span class="nav-icon">📦</span>
+      <span class="nav-label">Compras</span>
+      <span class="nav-desc">Recibir mercancia</span>
+    </a>
+    <a class="nav-card" href="boparts_gastos.html">
+      <span class="nav-icon">💸</span>
+      <span class="nav-label">Gastos</span>
+      <span class="nav-desc">Registrar gasto</span>
+    </a>
+    <a class="nav-card" href="boparts_cobros.html">
+      <span class="nav-icon">🧾</span>
+      <span class="nav-label">Cobros</span>
+      <span class="nav-desc">Cuentas por cobrar</span>
+    </a>
+    <a class="nav-card" href="boparts_gerencia.html">
+      <span class="nav-icon">📊</span>
+      <span class="nav-label">Gerencia</span>
+      <span class="nav-desc">Solo socios</span>
+    </a>
+    <a class="nav-card" href="boparts_apartados.html">
+      <span class="nav-icon">🔖</span>
+      <span class="nav-label">Apartados</span>
+      <span class="nav-desc">Y contra pedido</span>
+    </a>
+    <a class="nav-card" href="boparts_devoluciones.html">
+      <span class="nav-icon">↩️</span>
+      <span class="nav-label">Devoluciones</span>
+      <span class="nav-desc">Y cambios</span>
+    </a>
+    <a class="nav-card" href="boparts_inventario.html">
+      <span class="nav-icon">🧮</span>
+      <span class="nav-label">Inventario</span>
+      <span class="nav-desc">Conteo de stock</span>
+    </a>
+  </div>
+</div>
+
+<script>
+function toggleNav(){
+  var open = document.getElementById('navPanel').classList.toggle('show');
+  document.getElementById('navOverlay').classList.toggle('show', open);
+  document.getElementById('fabBtn').classList.toggle('open', open);
+}
+function closeNav(){
+  document.getElementById('navPanel').classList.remove('show');
+  document.getElementById('navOverlay').classList.remove('show');
+  document.getElementById('fabBtn').classList.remove('open');
+}
+</script>
+
+
+</body>
+</html>
